@@ -71,24 +71,31 @@ export default function Home() {
     let db: SQLJsDatabaseType | null = null;
 
     try {
-      // Dynamically import initSqlJs - using the main package entry
+      // Dynamically import initSqlJs
       const sqlJsModule = await import('sql.js');
+      console.log('[ClientProcess] sql.js module loaded:', sqlJsModule);
       const initSqlJs = sqlJsModule.default;
+      console.log('[ClientProcess] typeof initSqlJs:', typeof initSqlJs);
 
-      if (!initSqlJs) {
-          console.error('[ClientProcess] SQL.js (initSqlJs) failed to load dynamically.');
-          throw new Error('SQL.js (initSqlJs) failed to load dynamically.');
+      if (typeof initSqlJs !== 'function') {
+          console.error('[ClientProcess] Fatal: initSqlJs is not a function!', initSqlJs);
+          throw new Error('SQL.js (initSqlJs) is not a function.');
       }
-
+      
+      console.log('[ClientProcess] Attempting to initialize SQL.js with locateFile pointing to sql.js.org...');
       SQL = await initSqlJs({
-        locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+        locateFile: file => {
+          const path = `https://sql.js.org/dist/${file}`;
+          console.log(`[ClientProcess] locateFile requesting: ${path}`); // Log the path being requested
+          return path;
+        }
       });
 
       if (!SQL) {
           console.error('[ClientProcess] SQL.js failed to initialize (SQL object is null/undefined).');
           throw new Error('SQL.js failed to initialize.');
       }
-      console.log('[ClientProcess] SQL.js initialized successfully.');
+      console.log('[ClientProcess] SQL.js initialized successfully. SQL object:', SQL);
 
       const uint8Array = new Uint8Array(fileBuffer);
       db = new SQL.Database(uint8Array);
