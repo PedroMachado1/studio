@@ -87,14 +87,13 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
   let db: Database | null = null;
   try {
     SQL = await initSqlJs({
-      // sql.js attempts to load sql-wasm.wasm from node_modules in Node.js
-      // locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}` // Fallback for some environments
+      locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
     });
     if (!SQL) {
-        console.error('[processKoreaderDb] SQL.js failed to initialize.');
+        console.error('[processKoreaderDb] SQL.js failed to initialize (SQL object is null/undefined).');
         throw new Error('SQL.js failed to initialize.');
     }
-    console.log('[processKoreaderDb] SQL.js initialized.');
+    console.log('[processKoreaderDb] SQL.js initialized successfully.');
 
     if (!input.fileDataUri.includes(',')) {
       console.error('[processKoreaderDb] Invalid data URI format.');
@@ -222,7 +221,10 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
   } catch (error)  {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorStack = error instanceof Error ? error.stack : undefined;
-    console.error('[processKoreaderDb] Error processing KoReader DB:', errorMessage, errorStack);
+    console.error('[processKoreaderDb] Error processing KoReader DB:', errorMessage);
+    if (errorStack) {
+        console.error('[processKoreaderDb] Stack trace:', errorStack);
+    }
     return {
       totalBooks: 0,
       totalPagesRead: 0,
@@ -243,3 +245,4 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     }
   }
 }
+
