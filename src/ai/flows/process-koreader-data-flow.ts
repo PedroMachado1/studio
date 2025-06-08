@@ -57,7 +57,7 @@ function safeParseJson(jsonString: string | null | undefined, key: string, defau
     const parsed = JSON.parse(jsonString);
     return parsed[key] || defaultValue;
   } catch (e) {
-    console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for key '${key}': ${jsonString}. Error: ${e}`);
+    console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for key '${key}': ${jsonString}. Error: ${e instanceof Error ? e.message : String(e)}`);
     return defaultValue;
   }
 }
@@ -75,7 +75,7 @@ function parseTotalPages(notes: string | null | undefined): number {
     }
     return total;
   } catch (e) {
-    console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e}`);
+    console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e instanceof Error ? e.message : String(e)}`);
     return 0; // If JSON parsing fails or key not found
   }
 }
@@ -113,7 +113,6 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
 
     const allBookStats: BookStats[] = [];
     
-    // First, let's see how many rows are in the bookmark table
     const countStmt = db.prepare(`SELECT COUNT(*) as count FROM bookmark WHERE content_id IS NOT NULL AND content_id != ''`);
     let totalRowsInTable = 0;
     if (countStmt.step()) {
@@ -124,7 +123,6 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
 
     if (totalRowsInTable === 0) {
         console.warn('[processKoreaderDb] No relevant rows found in bookmark table. Aborting further processing.');
-        // Fall through to return empty stats
     } else {
         const stmt = db.prepare(`
           SELECT 
@@ -139,30 +137,17 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
         `);
         console.log('[processKoreaderDb] Prepared SQL statement for bookmark table.');
 
-        // TEMPORARILY REMOVED FOR DEBUGGING
-        // const processedTitles = new Set<string>();
         let rowCount = 0;
 
         while (stmt.step()) {
           rowCount++;
           const row = stmt.getAsObject();
 
-          if (rowCount <= 5 || rowCount % 100 === 0) { // Log first 5 rows and then every 100th
+          if (rowCount <= 5 || rowCount % 100 === 0) {
             console.log(`[processKoreaderDb] Processing row ${rowCount}: content_id='${row.content_id}', progress=${row.progress}, page=${row.page}, notes (length)=${(row.notes as string)?.length}, datetime=${row.datetime}`);
           }
           
           const title = parseBookTitle(row.content_id as string);
-
-          // TEMPORARILY REMOVED FOR DEBUGGING
-          // if (processedTitles.has(title)) {
-          //   continue; 
-          // }
-          // if (title.startsWith("Unknown Title")) { // Keep unknown titles for now for debugging
-          //    console.warn(`[processKoreaderDb] Skipping row due to unknown title for content_id: ${row.content_id}`);
-          //    continue;
-          // }
-          // processedTitles.add(title);
-
 
           const totalPages = parseTotalPages(row.notes as string | null);
           let pagesRead = 0;
@@ -215,29 +200,29 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
 
     const overallTotalPagesRead = allBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
     
-    // Filter pagesReadPerBook to include books that have actual pages or were read
     const pagesReadPerBookData = allBookStats
         .map(b => ({ name: b.title, value: b.totalPagesRead }))
         .filter(b => b.value > 0 || allBookStats.find(ab => ab.title === b.name && ab.totalPages > 0));
 
 
     const result: ProcessKoreaderDbOutput = {
-      totalBooks: new Set(allBookStats.map(b => b.title)).size, // Count unique titles for totalBooks
+      totalBooks: new Set(allBookStats.map(b => b.title)).size,
       totalPagesRead: overallTotalPagesRead,
-      totalTimeMinutes: 0, // Placeholder
-      totalSessions: 0,    // Placeholder
-      readingActivity: [], // Placeholder
+      totalTimeMinutes: 0, 
+      totalSessions: 0,    
+      readingActivity: [], 
       pagesReadPerBook: pagesReadPerBookData,
-      timeSpentPerBook: [], // Placeholder
-      monthlySummaries: [], // Placeholder
-      allBookStats: allBookStats, // Return all extracted stats, duplicates might exist for now
+      timeSpentPerBook: [], 
+      monthlySummaries: [], 
+      allBookStats: allBookStats,
     };
     console.log('[processKoreaderDb] Returning OverallStats:', JSON.stringify(result, null, 2));
     return result;
 
   } catch (error)  {
-    console.error('[processKoreaderDb] Error processing KoReader DB:', error instanceof Error ? error.message : error, error instanceof Error ? error.stack : '');
-    // Return a default empty structure on error
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error('[processKoreaderDb] Error processing KoReader DB:', errorMessage, errorStack);
     return {
       totalBooks: 0,
       totalPagesRead: 0,
@@ -258,4 +243,3 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     }
   }
 }
-
