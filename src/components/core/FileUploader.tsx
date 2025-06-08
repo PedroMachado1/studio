@@ -9,7 +9,7 @@ import { UploadCloud } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface FileUploaderProps {
-  onFileLoad: (fileData?: ArrayBuffer) => void; // Optional: pass file data up
+  onFileLoad: (fileData: ArrayBuffer) => void; 
 }
 
 export function FileUploader({ onFileLoad }: FileUploaderProps) {
@@ -35,19 +35,15 @@ export function FileUploader({ onFileLoad }: FileUploaderProps) {
       }
 
       toast({
-        title: "Loading file...",
-        description: file.name,
+        title: "File Selected",
+        description: `Preparing to process ${file.name}...`,
       });
 
       const reader = new FileReader();
       reader.onload = (e) => {
         const arrayBuffer = e.target?.result as ArrayBuffer;
         if (arrayBuffer) {
-          onFileLoad(arrayBuffer); // Pass ArrayBuffer up
-          toast({
-            title: "File Loaded Successfully",
-            description: `${file.name} has been selected. Dashboard will display its data once processing is implemented. Currently showing sample data.`,
-          });
+          onFileLoad(arrayBuffer); // Pass ArrayBuffer up for processing
         } else {
           toast({
             title: "Error Reading File",
@@ -88,7 +84,7 @@ export function FileUploader({ onFileLoad }: FileUploaderProps) {
           <input
             id="fileInput"
             type="file"
-            accept=".sqlite,.sqlite3"
+            accept=".sqlite,.sqlite3,application/vnd.sqlite3,application/x-sqlite3"
             className="hidden"
             ref={fileInputRef}
             onChange={handleFileChange}
