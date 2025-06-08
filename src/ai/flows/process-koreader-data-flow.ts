@@ -53,7 +53,7 @@ function safeParseJson(jsonString: string | null | undefined, key: string, defau
     const parsed = JSON.parse(jsonString);
     return parsed[key] || defaultValue;
   } catch (e) {
-    // console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for key '${key}': ${jsonString}. Error: ${e}`);
+    console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for key '${key}': ${jsonString}. Error: ${e}`);
     return defaultValue;
   }
 }
@@ -64,9 +64,9 @@ function parseTotalPages(notes: string | null | undefined): number {
   try {
     const parsedNotes = JSON.parse(notes);
     // Check common locations for total_pages or page_count
-    return parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || 0;
+    return Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || 0);
   } catch (e) {
-    // console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e}`);
+    console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e}`);
     return 0; // If JSON parsing fails or key not found
   }
 }
@@ -102,6 +102,7 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
         notes, 
         datetime
       FROM bookmark 
+      WHERE content_id IS NOT NULL AND content_id != '' 
       ORDER BY content_id, datetime DESC
     `);
     console.log('[processKoreaderDb] Prepared SQL statement for bookmark table.');
@@ -114,39 +115,56 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
       const row = stmt.getAsObject();
       const title = parseBookTitle(row.content_id as string);
 
-      if (processedTitles.has(title)) {
-        continue;
+      if (title === "Unknown Title" || processedTitles.has(title)) {
+        continue; // Skip unknown titles or already processed latest entry for this title
       }
       processedTitles.add(title);
 
       const totalPages = parseTotalPages(row.notes as string | null);
       let pagesRead = 0;
-      if (totalPages > 0 && row.progress != null) {
-        pagesRead = Math.round((row.progress as number) * totalPages);
-      } else if (row.page != null) {
-        pagesRead = row.page as number;
+      
+      if (totalPages > 0 && row.progress != null && typeof row.progress === 'number') {
+        pagesRead = Math.round(row.progress * totalPages);
+      } else if (row.page != null && typeof row.page === 'number') {
+        pagesRead = row.page;
       }
       
       if (totalPages > 0 && pagesRead > totalPages) {
           pagesRead = totalPages;
       }
+      if (pagesRead < 0) pagesRead = 0;
 
+
+      let lastSessionIsoDate: string | undefined = undefined;
+      if (row.datetime != null && typeof row.datetime === 'number') {
+        // Assuming datetime is Unix timestamp in seconds (common for strftime('%s','now'))
+        lastSessionIsoDate = new Date(row.datetime * 1000).toISOString();
+      } else if (row.datetime != null && typeof row.datetime === 'string') {
+        const parsedDate = new Date(row.datetime);
+        if (!isNaN(parsedDate.getTime())) {
+            lastSessionIsoDate = parsedDate.toISOString();
+        } else {
+            console.warn(`[processKoreaderDb] Could not parse datetime string: ${row.datetime} for title ${title}`);
+        }
+      }
+      
       const bookStat: BookStats = {
         title: title,
         totalPagesRead: pagesRead,
-        totalPages: totalPages || 0, 
-        lastSessionDate: row.datetime ? new Date(row.datetime as string).toISOString() : undefined,
+        totalPages: totalPages > 0 ? totalPages : 0, 
+        lastSessionDate: lastSessionIsoDate,
         totalTimeMinutes: 0, 
         sessions: 0, 
-        firstSessionDate: row.datetime ? new Date(row.datetime as string).toISOString() : undefined, 
+        firstSessionDate: undefined, // Not reliably extractable with this single query
       };
       allBookStats.push(bookStat);
     }
     stmt.free();
     console.log(`[processKoreaderDb] Processed ${rowCount} rows from bookmark table.`);
-    console.log(`[processKoreaderDb] Found ${allBookStats.length} unique books.`);
+    console.log(`[processKoreaderDb] Found ${allBookStats.length} unique books after filtering.`);
     if (allBookStats.length > 0) {
-        console.log('[processKoreaderDb] First book details:', JSON.stringify(allBookStats[0], null, 2));
+        console.log('[processKoreaderDb] First processed book details:', JSON.stringify(allBookStats[0], null, 2));
+        if(allBookStats.length > 1) console.log('[processKoreaderDb] Second processed book details:', JSON.stringify(allBookStats[1], null, 2));
     }
 
 
@@ -155,12 +173,12 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     const result: ProcessKoreaderDbOutput = {
       totalBooks: allBookStats.length,
       totalPagesRead: overallTotalPagesRead,
-      totalTimeMinutes: 0, 
-      totalSessions: 0,    
-      readingActivity: [], 
-      pagesReadPerBook: allBookStats.map(b => ({name: b.title, value: b.totalPagesRead})),
-      timeSpentPerBook: [], 
-      monthlySummaries: [], 
+      totalTimeMinutes: 0, // Placeholder
+      totalSessions: 0,    // Placeholder
+      readingActivity: [], // Placeholder
+      pagesReadPerBook: allBookStats.map(b => ({name: b.title, value: b.totalPagesRead})).filter(b => b.value > 0 || allBookStats.find(ab => ab.title === b.name && ab.totalPages > 0)),
+      timeSpentPerBook: [], // Placeholder
+      monthlySummaries: [], // Placeholder
       allBookStats: allBookStats,
     };
     console.log('[processKoreaderDb] Returning OverallStats:', JSON.stringify(result, null, 2));
@@ -168,6 +186,7 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
 
   } catch (error) {
     console.error('[processKoreaderDb] Error processing KoReader DB:', error);
+    // Return a default empty structure on error
     return {
       totalBooks: 0,
       totalPagesRead: 0,
@@ -184,3 +203,4 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     db?.close();
   }
 }
+
