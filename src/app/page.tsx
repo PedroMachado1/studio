@@ -18,7 +18,7 @@ function parseTotalPages(notes: string | null | undefined): number {
     const parsedNotes = JSON.parse(notes);
     const total = Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || parsedNotes.statistics?.total_pages || 0);
     if (isNaN(total)) {
-        console.warn(`[ClientProcess] Parsed total pages is NaN from notes: ${notes}`);
+        // console.warn(`[ClientProcess] Parsed total pages is NaN from notes: ${notes}`);
         return 0;
     }
     return total;
@@ -61,7 +61,7 @@ function parseTimestampToDate(timestamp: any): Date | undefined {
             return new Date(numTimestamp * 1000);
         }
     }
-    console.warn(`[ClientProcess] Could not parse timestamp: ${timestamp}`);
+    // console.warn(`[ClientProcess] Could not parse timestamp: ${timestamp}`);
     return undefined;
 }
 
@@ -70,6 +70,7 @@ export default function Home() {
   const { isFileLoaded, setIsFileLoaded } = useFileLoad();
   const [dashboardData, setDashboardData] = useState<OverallStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [dashboardKey, setDashboardKey] = useState(Date.now().toString());
   const { toast } = useToast();
 
   const processDbClientSide = async (fileBuffer: ArrayBuffer): Promise<OverallStats> => {
@@ -139,7 +140,7 @@ export default function Home() {
         while(pageStatDataStmt.step()) {
             const row = pageStatDataStmt.getAsObject();
             if (row.id_book && row.book_total_pages != null) {
-                bookIdToTotalPages.set(row.id_book as string, row.book_total_pages as number);
+                bookIdToTotalPages.set(row.id_book as string, Number(row.book_total_pages));
             }
         }
         pageStatDataStmt.free();
@@ -170,7 +171,7 @@ export default function Home() {
         }
         
         if (!row.title || (row.title as string).trim() === '') {
-          console.warn(`[ClientProcess] Skipping book with empty title, id: ${row.id}`);
+          // console.warn(`[ClientProcess] Skipping book with empty title, id: ${row.id}`);
           continue;
         }
 
@@ -181,13 +182,7 @@ export default function Home() {
         if (totalPages === 0 && row.notes) {
           totalPages = parseTotalPages(row.notes as string | null);
         }
-        if (totalPages === 0 && row.pages && Number(row.pages) > 0) { // If pages read is positive, assume that's total pages if no other info
-            // console.warn(`[ClientProcess] No total_pages found for book '${title}', using current 'pages' (${row.pages}) as total. Notes: ${row.notes}`);
-            // totalPages = Number(row.pages); 
-            // This assumption might be wrong if a book is partially read and then total_pages is removed from notes
-        }
-
-
+        
         const pagesRead = row.pages != null ? Number(row.pages) : 0;
         const totalTimeMinutes = row.total_read_time != null ? Math.round(Number(row.total_read_time) / 60) : 0;
         
@@ -199,7 +194,7 @@ export default function Home() {
           totalPages: totalPages,
           totalTimeMinutes: totalTimeMinutes,
           sessions: totalTimeMinutes > 0 ? 1 : 0, 
-          firstSessionDate: lastSessionDate, // Using last_open for both for now
+          firstSessionDate: lastSessionDate, 
           lastSessionDate: lastSessionDate,
         };
         allBookStats.push(bookStat);
@@ -208,7 +203,7 @@ export default function Home() {
       console.log(`[ClientProcess] Finished processing ${rowCount} rows from book table.`);
       
       console.log(`[ClientProcess] Found ${allBookStats.length} book stat entries after processing.`);
-      if (allBookStats.length > 0) {
+      if (allBookStats.length > 0 && allBookStats[0]) {
           console.log('[ClientProcess] First processed book details:', JSON.stringify(allBookStats[0], null, 2));
       }
 
@@ -218,7 +213,7 @@ export default function Home() {
       
       const pagesReadPerBookData: NameValue[] = allBookStats
           .map(b => ({ name: b.title, value: b.totalPagesRead }))
-          .filter(b => b.value > 0 || allBookStats.find(fb => fb.title === b.name && fb.totalPages > 0)); // Show book if it has total pages, even if 0 read
+          .filter(b => b.value > 0 || (allBookStats.find(fb => fb.title === b.name)?.totalPages ?? 0) > 0);
 
       const timeSpentPerBookData: NameValue[] = allBookStats
           .map(b => ({ name: b.title, value: b.totalTimeMinutes }))
@@ -229,10 +224,10 @@ export default function Home() {
         totalPagesRead: overallTotalPagesRead,
         totalTimeMinutes: overallTotalTimeMinutes, 
         totalSessions: overallTotalSessions,   
-        readingActivity: [], // Placeholder - requires page_stat processing
+        readingActivity: [], 
         pagesReadPerBook: pagesReadPerBookData,
         timeSpentPerBook: timeSpentPerBookData, 
-        monthlySummaries: [], // Placeholder - requires page_stat processing
+        monthlySummaries: [], 
         allBookStats: allBookStats,
       };
       console.log('[ClientProcess] Returning OverallStats:', JSON.stringify(result, null, 2));
@@ -251,7 +246,7 @@ export default function Home() {
           console.log('[ClientProcess] Closing DB connection.');
           db.close();
       } else {
-          console.log('[ClientProcess] DB connection was not established or already closed.');
+          // console.log('[ClientProcess] DB connection was not established or already closed.');
       }
     }
   };
@@ -259,7 +254,8 @@ export default function Home() {
   const handleFileLoad = async (fileBuffer?: ArrayBuffer) => {
     if (!fileBuffer) { 
       setIsFileLoaded(true); 
-      setDashboardData(MOCK_OVERALL_STATS); 
+      setDashboardData(MOCK_OVERALL_STATS);
+      setDashboardKey(Date.now().toString());
       console.log('[Home Page] No file buffer, using MOCK_OVERALL_STATS.');
       return;
     }
@@ -276,9 +272,10 @@ export default function Home() {
       console.log('[Home Page] Received processedStats from client-side function:', JSON.stringify(processedStats, null, 2));
       
       if (!processedStats || (processedStats.totalBooks === 0 && processedStats.allBookStats.length === 0 && processedStats.totalPagesRead === 0) ) {
-        console.warn('[Home Page] Processed stats appear to be empty or minimal.');
+        // console.warn('[Home Page] Processed stats appear to be empty or minimal.');
         setDashboardData(processedStats); 
-        setIsFileLoaded(true); 
+        setIsFileLoaded(true);
+        setDashboardKey(Date.now().toString());
         toast({
           title: "Data Processed",
           description: "Successfully processed the file, but no significant reading data was found. The displayed data might be minimal or empty. Please check your KoReader file or the browser console for details.",
@@ -287,6 +284,7 @@ export default function Home() {
       } else {
         setDashboardData(processedStats);
         setIsFileLoaded(true);
+        setDashboardKey(Date.now().toString());
         toast({
           title: "Data Processed Successfully!",
           description: "Displaying your KoReader statistics (processed client-side).",
@@ -295,7 +293,8 @@ export default function Home() {
     } catch (error) {
       console.error("[Home Page] Error in handleFileLoad's try block (client-side processing):", error);
       setDashboardData(MOCK_OVERALL_STATS); 
-      setIsFileLoaded(true); 
+      setIsFileLoaded(true);
+      setDashboardKey(Date.now().toString());
       toast({
         title: "Error Processing File Client-Side",
         description: `Could not process the KoReader data. ${error instanceof Error ? error.message : String(error)}. Showing sample data. Check browser console.`,
@@ -310,7 +309,8 @@ export default function Home() {
 
   const handleReset = () => {
     setIsFileLoaded(false);
-    setDashboardData(null); // Reset to null, so MOCK_OVERALL_STATS will be used by Dashboard as fallback
+    setDashboardData(null); 
+    setDashboardKey(Date.now().toString());
   };
 
   return (
@@ -319,7 +319,7 @@ export default function Home() {
         <FileUploader onFileLoad={handleFileLoad} />
       ) : (
         <>
-          <Dashboard data={dashboardData || MOCK_OVERALL_STATS} />
+          <Dashboard key={dashboardKey} data={dashboardData || MOCK_OVERALL_STATS} />
           <div className="container mx-auto text-center py-8">
             <Button onClick={handleReset} variant="outline" disabled={isLoading}>
               {isLoading ? "Processing..." : "Load Another File"}
@@ -330,6 +330,4 @@ export default function Home() {
     </>
   );
 }
-    
-
     
