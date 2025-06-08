@@ -105,6 +105,21 @@ export default function Home() {
       }
       console.log('[ClientProcess] Database opened.');
 
+      // Log all table names
+      const tablesStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table';");
+      const tableNames: string[] = [];
+      while(tablesStmt.step()) {
+        const row = tablesStmt.getAsObject();
+        tableNames.push(row.name as string);
+      }
+      tablesStmt.free();
+      console.log('[ClientProcess] Tables in the database:', tableNames);
+
+      if (!tableNames.includes('bookmark')) {
+        console.error(`[ClientProcess] Critical: Table 'bookmark' not found in the database. Available tables: ${tableNames.join(', ')}`);
+        throw new Error("Table 'bookmark' not found. Check if this is a valid KoReader metadata.sqlite file.");
+      }
+
       const allBookStats: BookStats[] = [];
       
       const countStmt = db.prepare(`SELECT COUNT(*) as count FROM bookmark`);
@@ -200,11 +215,13 @@ export default function Home() {
       const uniqueBooks = new Map<string, BookStats>();
       allBookStats.forEach(stat => {
           const existing = uniqueBooks.get(stat.title);
-          if (!existing || (stat.lastSessionDate && existing.lastSessionDate && stat.lastSessionDate > existing.lastSessionDate)) {
+          if (!existing || (stat.lastSessionDate && (!existing.lastSessionDate || stat.lastSessionDate > existing.lastSessionDate))) {
               uniqueBooks.set(stat.title, stat);
           } else if (!existing && !stat.lastSessionDate && !existing?.lastSessionDate) { 
              uniqueBooks.set(stat.title, stat);
           } else if (!existing) { 
+              uniqueBooks.set(stat.title, stat);
+          } else if (!existing.lastSessionDate && stat.lastSessionDate) { // Existing has no date, new one does
               uniqueBooks.set(stat.title, stat);
           }
       });
@@ -291,8 +308,9 @@ export default function Home() {
       setIsFileLoaded(true); 
       toast({
         title: "Error Processing File Client-Side",
-        description: "Could not process the KoReader data. Showing sample data instead. Check browser console for details.",
+        description: `Could not process the KoReader data. ${error instanceof Error ? error.message : String(error)}. Showing sample data. Check browser console.`,
         variant: "destructive",
+        duration: 9000,
       });
     } finally {
       setIsLoading(false);
@@ -322,3 +340,5 @@ export default function Home() {
     </>
   );
 }
+
+      
