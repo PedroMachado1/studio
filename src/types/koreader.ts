@@ -57,3 +57,46 @@ export const MOCK_OVERALL_STATS: OverallStats = {
     { name: "Learning React", value: 420 }, 
   ],
 };
+
+export const MOCK_BOOK_STATS_LIST: BookStats[] = [
+  {
+    title: "The Great Novel",
+    totalPagesRead: 300,
+    totalTimeMinutes: 720, // 12 hours
+    sessions: 15,
+    firstSessionDate: new Date("2023-01-10T10:00:00Z"),
+    lastSessionDate: new Date("2023-01-25T18:30:00Z"),
+  },
+  {
+    title: "Another Story",
+    totalPagesRead: 250,
+    totalTimeMinutes: 600, // 10 hours
+    sessions: 10,
+    firstSessionDate: new Date("2023-02-05T14:00:00Z"),
+    lastSessionDate: new Date("2023-02-20T20:00:00Z"),
+  },
+  {
+    title: "Sci-Fi Adventure",
+    totalPagesRead: 400,
+    totalTimeMinutes: 900, // 15 hours
+    sessions: 20,
+    firstSessionDate: new Date("2023-03-01T09:00:00Z"),
+    lastSessionDate: new Date("2023-03-28T22:00:00Z"),
+  },
+  {
+    title: "Mystery Tales",
+    totalPagesRead: 150,
+    totalTimeMinutes: 360, // 6 hours
+    sessions: 8,
+    firstSessionDate: new Date("2023-04-12T11:00:00Z"),
+    lastSessionDate: new Date("2023-04-25T16:30:00Z"),
+  },
+  {
+    title: "Learning React",
+    totalPagesRead: 150,
+    totalTimeMinutes: 420, // 7 hours
+    sessions: 25,
+    firstSessionDate: new Date("2023-05-01T08:00:00Z"),
+    lastSessionDate: new Date("2023-05-30T17:00:00Z"),
+  },
+];
