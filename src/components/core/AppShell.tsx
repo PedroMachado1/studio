@@ -24,7 +24,7 @@ function AppFooter() {
   return (
     <footer className="py-4 px-4 md:px-6 border-t border-border bg-card">
       <div className="container mx-auto text-center text-xs text-muted-foreground">
-        <p>&copy; {new Date().getFullYear()} KoReader Insight Web. Demo.</p>
+        <p>&copy; {new Date().getFullYear()} KoReader Insight Web. All rights reserved.</p>
       </div>
     </footer>
   );

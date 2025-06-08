@@ -16,6 +16,7 @@ export default function Home() {
 
   const handleReset = () => {
     setIsFileLoaded(false);
+    // Potentially reset other data states if actual file data was being stored
   };
 
   return (
@@ -27,7 +28,7 @@ export default function Home() {
           <Dashboard data={MOCK_OVERALL_STATS} />
           <div className="container mx-auto text-center py-8">
             <Button onClick={handleReset} variant="outline">
-              Load Another File (Reset Demo)
+              Load Another File
             </Button>
           </div>
         </>

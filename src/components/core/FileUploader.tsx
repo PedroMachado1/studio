@@ -1,23 +1,74 @@
 
 "use client";
 
+import type React from 'react';
+import { useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UploadCloud } from "lucide-react";
-import type React from 'react';
+import { useToast } from "@/hooks/use-toast";
 
 interface FileUploaderProps {
-  onFileLoad: () => void;
+  onFileLoad: (fileData?: ArrayBuffer) => void; // Optional: pass file data up
 }
 
 export function FileUploader({ onFileLoad }: FileUploaderProps) {
-  const handleFileUpload = () => {
-    // In a real app, this would involve:
-    // 1. Opening a file dialog: document.getElementById('fileInput').click();
-    // 2. Reading the file: e.g., using FileReader and potentially sql.js
-    // 3. Processing the data
-    // For this demo, we'll just simulate it.
-    onFileLoad();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const handleButtonClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (file) {
+      if (!file.name.endsWith('.sqlite') && !file.name.endsWith('.sqlite3')) {
+        toast({
+          title: "Invalid File Type",
+          description: "Please select a valid .sqlite or .sqlite3 file.",
+          variant: "destructive",
+        });
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        return;
+      }
+
+      toast({
+        title: "Loading file...",
+        description: file.name,
+      });
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const arrayBuffer = e.target?.result as ArrayBuffer;
+        if (arrayBuffer) {
+          onFileLoad(arrayBuffer); // Pass ArrayBuffer up
+          toast({
+            title: "File Loaded Successfully",
+            description: `${file.name} has been selected. Dashboard will display its data once processing is implemented. Currently showing sample data.`,
+          });
+        } else {
+          toast({
+            title: "Error Reading File",
+            description: "Could not read the file content.",
+            variant: "destructive",
+          });
+        }
+      };
+      reader.onerror = () => {
+        toast({
+          title: "Error Reading File",
+          description: "An error occurred while trying to read the file.",
+          variant: "destructive",
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    // Reset file input to allow re-uploading the same file
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   return (
@@ -34,20 +85,23 @@ export function FileUploader({ onFileLoad }: FileUploaderProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center">
-          {/* Hidden file input, can be triggered by the button */}
-          {/* <Input id="fileInput" type="file" accept=".sqlite,.sqlite3" className="hidden" onChange={handleActualFileChange} /> */}
-          <Button 
-            size="lg" 
-            onClick={handleFileUpload} 
+          <input
+            id="fileInput"
+            type="file"
+            accept=".sqlite,.sqlite3"
+            className="hidden"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+          />
+          <Button
+            size="lg"
+            onClick={handleButtonClick}
             className="mt-4 w-full max-w-xs"
             aria-label="Load Reading Data"
           >
             <UploadCloud className="mr-2 h-5 w-5" />
-            Load Reading Data (Demo)
+            Load Reading Data
           </Button>
-          <p className="mt-4 text-xs text-muted-foreground">
-            (This is a demo version using mock data)
-          </p>
         </CardContent>
       </Card>
     </div>
