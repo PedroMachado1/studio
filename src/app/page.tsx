@@ -6,23 +6,72 @@ import { useState } from 'react';
 import { useFileLoad } from '@/context/FileLoadContext';
 import { FileUploader } from '@/components/core/FileUploader';
 import { Dashboard } from '@/components/core/Dashboard';
-import { MOCK_OVERALL_STATS, type OverallStats } from '@/types/koreader'; // Keep MOCK for fallback
+import { MOCK_OVERALL_STATS, type OverallStats, type BookStats, type NameValue, type ReadingActivityPoint } from '@/types/koreader';
 import { Button } from '@/components/ui/button';
-import { processKoreaderDb, type ProcessKoreaderDbOutput } from '@/ai/flows/process-koreader-data-flow';
 import { useToast } from "@/hooks/use-toast";
+// Import types from sql.js for type checking, not for runtime.
+import type { SqlJsStatic, Database as SQLJsDatabaseType } from 'sql.js';
 
-// Helper to convert ArrayBuffer to Base64 Data URI
-function arrayBufferToDataUri(buffer: ArrayBuffer, mimeType: string = 'application/vnd.sqlite3'): string {
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
+
+// Helper functions previously in server-side flow, now client-side
+function parseBookTitle(contentId: string | null | undefined): string {
+  if (!contentId) {
+    console.warn(`[ClientProcess] parseBookTitle received null or undefined content_id.`);
+    return "Unknown Title (Invalid Input)";
   }
-  const base64 = btoa(binary);
-  return `data:${mimeType};base64,${base64}`;
+  try {
+    let pathPart = contentId;
+    // Example: (doc: /mnt/onboard/Books/My Great Book.epub).lua
+    if (contentId.startsWith("(doc: ") && contentId.endsWith(").lua")) {
+      pathPart = contentId.substring(6, contentId.length - 5);
+    }
+    const parts = pathPart.split('/');
+    const fileNameWithExt = parts[parts.length - 1];
+    const lastDotIndex = fileNameWithExt.lastIndexOf('.');
+    if (lastDotIndex > 0) {
+      return fileNameWithExt.substring(0, lastDotIndex);
+    }
+    if (fileNameWithExt === "") {
+        console.warn(`[ClientProcess] parseBookTitle resulted in empty title for content_id: ${contentId}`);
+        return "Unknown Title (Empty Filename)";
+    }
+    return fileNameWithExt; // Return filename if no extension found (e.g. for directories)
+  } catch (e) {
+    console.warn(`[ClientProcess] Error parsing book title from content_id: ${contentId}`, e);
+    return "Unknown Title (Parse Error)";
+  }
 }
 
+function parseTotalPages(notes: string | null | undefined): number {
+  if (!notes) return 0;
+  try {
+    const parsedNotes = JSON.parse(notes);
+    // Try various common keys where total_pages might be stored
+    const total = Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || parsedNotes.statistics?.total_pages || 0);
+    if (isNaN(total)) {
+        console.warn(`[ClientProcess] Parsed total pages is NaN from notes: ${notes}`);
+        return 0;
+    }
+    return total;
+  } catch (e) {
+    // console.warn(`[ClientProcess] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e instanceof Error ? e.message : String(e)}`);
+    return 0; // Return 0 if notes is not valid JSON or doesn't contain page info
+  }
+}
+
+// This function might not be strictly necessary if notes are consistently JSON, but can be a fallback.
+// For now, parseTotalPages handles JSON parsing directly.
+/*
+function safeParseJson(jsonString: string | null | undefined, defaultValue: any = null): any {
+  if (!jsonString) return defaultValue;
+  try {
+    return JSON.parse(jsonString);
+  } catch (e) {
+    // console.warn(`[ClientProcess] safeParseJson: Failed to parse JSON string: ${jsonString}`, e);
+    return defaultValue;
+  }
+}
+*/
 
 export default function Home() {
   const { isFileLoaded, setIsFileLoaded } = useFileLoad();
@@ -30,49 +79,243 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
+  const processDbClientSide = async (fileBuffer: ArrayBuffer): Promise<OverallStats> => {
+    console.log('[ClientProcess] Starting client-side DB processing...');
+    let SQL: SqlJsStatic | null = null;
+    let db: SQLJsDatabaseType | null = null;
+
+    try {
+      // Dynamically import initSqlJs
+      const initSqlJs = (await import('sql.js/dist/sql-asm.js')).default;
+
+      SQL = await initSqlJs({
+        locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+      });
+
+      if (!SQL) {
+          console.error('[ClientProcess] SQL.js failed to initialize (SQL object is null/undefined).');
+          throw new Error('SQL.js failed to initialize.');
+      }
+      console.log('[ClientProcess] SQL.js initialized successfully.');
+
+      const uint8Array = new Uint8Array(fileBuffer);
+      db = new SQL.Database(uint8Array);
+      if (!db) {
+          console.error('[ClientProcess] Failed to open database.');
+          throw new Error('Failed to open database.');
+      }
+      console.log('[ClientProcess] Database opened.');
+
+      const allBookStats: BookStats[] = [];
+      
+      // Count total rows for logging purposes
+      const countStmt = db.prepare(`SELECT COUNT(*) as count FROM bookmark`);
+      let totalRowsInTable = 0;
+      if (countStmt.step()) {
+          totalRowsInTable = countStmt.getAsObject().count as number;
+      }
+      countStmt.free();
+      console.log(`[ClientProcess] Total rows in bookmark table (unfiltered): ${totalRowsInTable}`);
+
+      if (totalRowsInTable === 0) {
+          console.warn('[ClientProcess] No rows found in bookmark table.');
+      } else {
+          // Simplified query - get all relevant fields, order by content_id then by datetime descending
+          // to make it easier to pick the latest entry per book later
+          const stmt = db.prepare(`
+            SELECT 
+              content_id, 
+              progress, 
+              page, 
+              notes, 
+              datetime
+            FROM bookmark
+          `);
+          // WHERE content_id IS NOT NULL AND trim(content_id) != ''
+          // ORDER BY content_id, datetime DESC 
+          // The ORDER BY can be memory intensive for very large tables client-side.
+          // Processing uniqueness client-side after fetching is generally safer.
+
+          console.log('[ClientProcess] Prepared SQL statement for bookmark table.');
+
+          let rowCount = 0;
+          let loopEntered = false;
+
+          while (stmt.step()) { // anvancify results
+            loopEntered = true;
+            rowCount++;
+            const row = stmt.getAsObject(); // {col1: val1, col2: val2,...}
+
+            // Log first few rows and then periodically
+            if (rowCount <= 5 || rowCount % 100 === 0) {
+              console.log(`[ClientProcess] Processing row ${rowCount}: content_id='${row.content_id}', progress=${row.progress}, page=${row.page}, notes (length)=${(row.notes as string)?.length}, datetime=${row.datetime}`);
+            }
+            
+            if (!row.content_id || (row.content_id as string).trim() === '') {
+              // console.log(`[ClientProcess] Skipping row ${rowCount} due to empty/null content_id.`);
+              continue;
+            }
+
+            const title = parseBookTitle(row.content_id as string);
+            const totalPages = parseTotalPages(row.notes as string | null);
+            let pagesRead = 0;
+            
+            // Calculate pagesRead based on progress or page field
+            if (totalPages > 0 && row.progress != null && typeof row.progress === 'number' && !isNaN(row.progress as number)) {
+              pagesRead = Math.round((row.progress as number) * totalPages);
+            } else if (row.page != null && typeof row.page === 'number' && !isNaN(row.page as number)) {
+              pagesRead = row.page as number;
+            }
+            
+            // Ensure pagesRead does not exceed totalPages and is not negative
+            if (totalPages > 0 && pagesRead > totalPages) pagesRead = totalPages;
+            if (pagesRead < 0) pagesRead = 0;
+
+            let lastSessionJsDate: Date | undefined = undefined;
+            if (row.datetime != null && typeof row.datetime === 'number') { // Unix timestamp in seconds
+              lastSessionJsDate = new Date(row.datetime * 1000);
+            } else if (row.datetime != null && typeof row.datetime === 'string') {
+              const parsedDate = new Date(row.datetime);
+              if (!isNaN(parsedDate.getTime())) {
+                lastSessionJsDate = parsedDate;
+              } else {
+                  console.warn(`[ClientProcess] Could not parse datetime string: ${row.datetime} for title ${title}`);
+              }
+            }
+            
+            const bookStat: BookStats = {
+              title: title,
+              totalPagesRead: pagesRead,
+              totalPages: totalPages > 0 ? totalPages : 0, // Ensure totalPages isn't negative, default to 0
+              lastSessionDate: lastSessionJsDate,
+              // Placeholders for data not directly extracted in this simplified version
+              totalTimeMinutes: 0, 
+              sessions: 0, 
+              firstSessionDate: undefined, // Requires more complex query/logic
+            };
+            allBookStats.push(bookStat);
+          }
+          stmt.free();
+          if (!loopEntered && totalRowsInTable > 0) {
+              console.warn('[ClientProcess] stmt.step() never returned true, but totalRowsInTable > 0. This might indicate an issue with the query or DB state.');
+          }
+          console.log(`[ClientProcess] Finished processing ${rowCount} rows from bookmark table query.`);
+      }
+      
+      console.log(`[ClientProcess] Found ${allBookStats.length} book stat entries after processing.`);
+      if (allBookStats.length > 0) {
+          console.log('[ClientProcess] First processed book details:', JSON.stringify(allBookStats[0], null, 2));
+          if (allBookStats.length > 1) {
+            console.log('[ClientProcess] Second processed book details:', JSON.stringify(allBookStats[1], null, 2));
+          }
+      }
+
+      // Logic to get the latest entry for each book
+      const uniqueBooks = new Map<string, BookStats>();
+      allBookStats.forEach(stat => {
+          const existing = uniqueBooks.get(stat.title);
+          if (!existing || (stat.lastSessionDate && existing.lastSessionDate && stat.lastSessionDate > existing.lastSessionDate)) {
+              uniqueBooks.set(stat.title, stat);
+          } else if (!existing && !stat.lastSessionDate && !existing?.lastSessionDate) { 
+             // If both new and existing have no date, prefer the one encountered (arbitrary but consistent)
+             // Or, if only the new one has no date, and existing has one, keep existing.
+             // If existing has no date, and new one does, it will be picked up by the first condition.
+             // This handles cases where dates might be missing.
+             uniqueBooks.set(stat.title, stat);
+          } else if (!existing) { // If no existing entry, add the current one.
+              uniqueBooks.set(stat.title, stat);
+          }
+      });
+      const finalBookStats = Array.from(uniqueBooks.values());
+      console.log(`[ClientProcess] Found ${finalBookStats.length} unique books after filtering.`);
+
+
+      const overallTotalPagesRead = finalBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
+      
+      // Ensure pagesReadPerBook includes books even if 0 pages read but totalPages > 0
+      const pagesReadPerBookData: NameValue[] = finalBookStats
+          .map(b => ({ name: b.title, value: b.totalPagesRead }))
+          .filter(b => b.value > 0 || finalBookStats.find(fb => fb.title === b.name && fb.totalPages > 0));
+
+
+      const result: OverallStats = {
+        totalBooks: uniqueBooks.size,
+        totalPagesRead: overallTotalPagesRead,
+        totalTimeMinutes: 0, // Placeholder
+        totalSessions: 0,    // Placeholder
+        readingActivity: [], // Placeholder
+        pagesReadPerBook: pagesReadPerBookData,
+        timeSpentPerBook: [], // Placeholder
+        monthlySummaries: [], // Placeholder
+        allBookStats: finalBookStats,
+      };
+      console.log('[ClientProcess] Returning OverallStats:', JSON.stringify(result, null, 2));
+      return result;
+
+    } catch (error)  {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error('[ClientProcess] Error processing KoReader DB:', errorMessage);
+      if (errorStack) {
+          console.error('[ClientProcess] Stack trace:', errorStack);
+      }
+      // Fallback to mock data or throw an error to be handled by the caller
+      throw error; // Re-throw to be caught by handleFileLoad
+    } finally {
+      if (db) {
+          console.log('[ClientProcess] Closing DB connection.');
+          db.close();
+      } else {
+          console.log('[ClientProcess] DB connection was not established or already closed.');
+      }
+    }
+  };
+
   const handleFileLoad = async (fileBuffer?: ArrayBuffer) => {
-    if (!fileBuffer) {
+    if (!fileBuffer) { // This case might be for a "use demo data" button if it existed
       setIsFileLoaded(true); 
       setDashboardData(MOCK_OVERALL_STATS); 
+      console.log('[Home Page] No file buffer, using MOCK_OVERALL_STATS.');
       return;
     }
 
     setIsLoading(true);
     toast({
       title: "Processing your KoReader data...",
-      description: "This may take a moment.",
+      description: "This may take a moment (client-side).",
     });
-    console.log('[Home Page] File buffer received, starting processing.');
+    console.log('[Home Page] File buffer received, starting client-side processing.');
 
     try {
-      const dataUri = arrayBufferToDataUri(fileBuffer);
-      console.log('[Home Page] Converted file to data URI, calling processKoreaderDb.');
-      const processedStats: ProcessKoreaderDbOutput = await processKoreaderDb({ fileDataUri: dataUri });
-      console.log('[Home Page] Received processedStats from server:', JSON.stringify(processedStats, null, 2));
+      const processedStats = await processDbClientSide(fileBuffer);
+      console.log('[Home Page] Received processedStats from client-side function:', JSON.stringify(processedStats, null, 2));
       
+      // Check if meaningful data was processed
       if (!processedStats || (processedStats.totalBooks === 0 && processedStats.allBookStats.length === 0 && processedStats.totalPagesRead === 0) ) {
         console.warn('[Home Page] Processed stats appear to be empty or minimal.');
-        setDashboardData(processedStats as OverallStats); // Set dashboard with (potentially empty) processed data
-        setIsFileLoaded(true);
+        // Set to the (potentially empty) processed stats to reflect what was actually processed
+        setDashboardData(processedStats); 
+        setIsFileLoaded(true); // Still mark as loaded to show the dashboard view
         toast({
           title: "Data Processed",
-          description: "Successfully processed the file, but no significant reading data was found. The displayed data might be minimal or empty. Please check your KoReader file or the server console for details.",
-          duration: 9000, 
+          description: "Successfully processed the file, but no significant reading data was found. The displayed data might be minimal or empty. Please check your KoReader file or the browser console for details.",
+          duration: 9000, // Longer duration for this important message
         });
       } else {
-        setDashboardData(processedStats as OverallStats);
+        setDashboardData(processedStats);
         setIsFileLoaded(true);
         toast({
           title: "Data Processed Successfully!",
-          description: "Displaying your KoReader statistics.",
+          description: "Displaying your KoReader statistics (processed client-side).",
         });
       }
     } catch (error) {
-      console.error("[Home Page] Error in handleFileLoad's try block:", error);
-      setDashboardData(MOCK_OVERALL_STATS); // Fallback to mock data on error
-      setIsFileLoaded(true); 
+      console.error("[Home Page] Error in handleFileLoad's try block (client-side processing):", error);
+      // Fallback to mock data on error to ensure app remains usable
+      setDashboardData(MOCK_OVERALL_STATS); 
+      setIsFileLoaded(true); // Mark as loaded to show the dashboard, even if it's mock data
       toast({
-        title: "Error Processing File",
+        title: "Error Processing File Client-Side",
         description: "Could not process the KoReader data. Showing sample data instead. Check browser console for details.",
         variant: "destructive",
       });
@@ -84,7 +327,8 @@ export default function Home() {
 
   const handleReset = () => {
     setIsFileLoaded(false);
-    setDashboardData(MOCK_OVERALL_STATS); 
+    setDashboardData(MOCK_OVERALL_STATS); // Reset to mock data when loading a new file
+    // Optionally, clear any file input if you have a ref to it
   };
 
   return (
@@ -104,3 +348,4 @@ export default function Home() {
     </>
   );
 }
+
