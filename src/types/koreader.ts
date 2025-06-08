@@ -18,21 +18,54 @@ export interface BookStats {
   lastSessionDate?: Date;
 }
 
+export interface MonthlyReadingSummary {
+  monthYear: string; // e.g., "January 2024"
+  totalPagesRead: number;
+  totalTimeMinutes: number;
+  totalSessions: number;
+  booksRead: Array<{ title: string }>; // Simplified for demo
+}
+
 export interface OverallStats {
   totalBooks: number;
   totalPagesRead: number;
   totalTimeMinutes: number;
   totalSessions: number;
-  readingActivity: { date: string; pages: number; time: number }[]; 
+  readingActivity: { date: string; pages: number; time: number }[];
   pagesReadPerBook: { name: string, value: number }[];
   timeSpentPerBook: { name: string, value: number }[];
+  monthlySummaries?: MonthlyReadingSummary[];
 }
+
+const MOCK_MONTHLY_SUMMARIES_DATA: MonthlyReadingSummary[] = [
+  {
+    monthYear: "December 2023",
+    totalPagesRead: 350,
+    totalTimeMinutes: 18 * 60, // 18 hours
+    totalSessions: 20,
+    booksRead: [{ title: "The Great Novel" }, { title: "Mystery Tales" }],
+  },
+  {
+    monthYear: "January 2024",
+    totalPagesRead: 450,
+    totalTimeMinutes: 22 * 60, // 22 hours
+    totalSessions: 25,
+    booksRead: [{ title: "The Great Novel" }, { title: "Sci-Fi Adventure" }, { title: "Another Story" }],
+  },
+  {
+    monthYear: "February 2024",
+    totalPagesRead: 250,
+    totalTimeMinutes: 15 * 60, // 15 hours
+    totalSessions: 18,
+    booksRead: [{ title: "Sci-Fi Adventure" }, { title: "Learning React" }],
+  },
+];
 
 export const MOCK_OVERALL_STATS: OverallStats = {
   totalBooks: 5,
   totalPagesRead: 1250,
-  totalTimeMinutes: 30 * 60, // 30 hours
-  totalSessions: 75,
+  totalTimeMinutes: 30 * 60, // 30 hours (overall total)
+  totalSessions: 75, // overall total
   readingActivity: [
     { date: 'Jan 01', pages: 50, time: 120 },
     { date: 'Jan 02', pages: 30, time: 90 },
@@ -50,12 +83,13 @@ export const MOCK_OVERALL_STATS: OverallStats = {
     { name: "Learning React", value: 150 },
   ],
   timeSpentPerBook: [
-    { name: "The Great Novel", value: 720 }, 
-    { name: "Another Story", value: 600 }, 
+    { name: "The Great Novel", value: 720 },
+    { name: "Another Story", value: 600 },
     { name: "Sci-Fi Adventure", value: 900 },
     { name: "Mystery Tales", value: 360 },
-    { name: "Learning React", value: 420 }, 
+    { name: "Learning React", value: 420 },
   ],
+  monthlySummaries: MOCK_MONTHLY_SUMMARIES_DATA,
 };
 
 export const MOCK_BOOK_STATS_LIST: BookStats[] = [

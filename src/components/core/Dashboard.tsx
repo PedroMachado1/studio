@@ -1,9 +1,20 @@
 
+"use client";
+
 import type React from 'react';
-import { OverallStats, MOCK_OVERALL_STATS } from "@/types/koreader";
+import { useState, useEffect } from 'react';
+import { OverallStats, type MonthlyReadingSummary } from "@/types/koreader";
 import { MetricCard } from "./MetricCard";
 import { ReadingChart } from "./ReadingChart";
-import { BookOpen, Clock, Repeat, BarChart3, LineChart as LineChartIcon, BookCopy } from "lucide-react";
+import { BookOpen, Clock, Repeat, BarChart3, LineChart as LineChartIcon, BookCopy, CalendarClock } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface DashboardProps {
   data: OverallStats;
@@ -12,7 +23,9 @@ interface DashboardProps {
 function formatTime(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
-  return `${hours}h ${mins}m`;
+  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${mins}m`;
 }
 
 export function Dashboard({ data }: DashboardProps) {
@@ -20,6 +33,28 @@ export function Dashboard({ data }: DashboardProps) {
     { name: "pages", color: "chart-1", icon: BookOpen },
     { name: "time", color: "chart-2", icon: Clock }
   ];
+
+  const { monthlySummaries } = data;
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
+  const [availableMonths, setAvailableMonths] = useState<string[]>([]);
+  const [currentMonthData, setCurrentMonthData] = useState<MonthlyReadingSummary | null>(null);
+
+  useEffect(() => {
+    if (monthlySummaries && monthlySummaries.length > 0) {
+      // Assuming summaries are chronologically sorted, reverse to show recent first in dropdown
+      const months = [...monthlySummaries].map(s => s.monthYear).reverse();
+      setAvailableMonths(months);
+      setSelectedMonth(months[0]); // Default to the most recent month (which is now first after reverse)
+    }
+  }, [monthlySummaries]);
+
+  useEffect(() => {
+    if (selectedMonth && monthlySummaries) {
+      const foundData = monthlySummaries.find(s => s.monthYear === selectedMonth);
+      setCurrentMonthData(foundData || null);
+    }
+  }, [selectedMonth, monthlySummaries]);
+
 
   return (
     <div className="container mx-auto py-8 px-4 md:px-6 space-y-8">
@@ -33,6 +68,58 @@ export function Dashboard({ data }: DashboardProps) {
           <MetricCard title="Total Sessions" value={data.totalSessions} icon={Repeat} description="Number of distinct reading sessions." />
         </div>
       </section>
+
+      {/* Monthly Reading Summary Section */}
+      {monthlySummaries && monthlySummaries.length > 0 && (
+        <section aria-labelledby="monthly-summary-title">
+          <div className="flex items-center gap-2 mb-6 mt-10">
+            <CalendarClock className="h-7 w-7 text-primary" />
+            <h2 id="monthly-summary-title" className="text-2xl font-bold font-headline text-foreground">
+              Monthly Reading Summary
+            </h2>
+          </div>
+          <div className="mb-6">
+            <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+              <SelectTrigger className="w-full max-w-xs shadow">
+                <SelectValue placeholder="Select month" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableMonths.map(month => (
+                  <SelectItem key={month} value={month}>{month}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {currentMonthData && (
+            <Card className="shadow-lg hover:shadow-xl transition-shadow duration-300">
+              <CardHeader>
+                <CardTitle className="font-headline text-primary">Summary for {currentMonthData.monthYear}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <MetricCard title="Pages Read" value={currentMonthData.totalPagesRead.toLocaleString()} icon={BookOpen} />
+                  <MetricCard title="Time Spent" value={formatTime(currentMonthData.totalTimeMinutes)} icon={Clock} />
+                  <MetricCard title="Sessions" value={currentMonthData.totalSessions} icon={Repeat} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold mb-3 text-foreground">Books Active This Month</h3>
+                  {currentMonthData.booksRead.length > 0 ? (
+                    <ul className="space-y-2">
+                      {currentMonthData.booksRead.map((book, index) => (
+                        <li key={index} className="text-sm text-muted-foreground p-2 bg-card rounded-md shadow-sm">
+                          {book.title}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No specific books tracked for this month in the demo data.</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </section>
+      )}
 
       {/* Reading Activity Chart */}
       <section aria-labelledby="reading-activity-title">
