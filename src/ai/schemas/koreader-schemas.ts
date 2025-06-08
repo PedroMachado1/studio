@@ -1,5 +1,4 @@
 
-'use server';
 /**
  * @fileOverview Zod schemas for KoReader data types.
  *
