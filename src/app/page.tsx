@@ -6,42 +6,12 @@ import { useState } from 'react';
 import { useFileLoad } from '@/context/FileLoadContext';
 import { FileUploader } from '@/components/core/FileUploader';
 import { Dashboard } from '@/components/core/Dashboard';
-import { MOCK_OVERALL_STATS, type OverallStats, type BookStats, type NameValue, type ReadingActivityPoint } from '@/types/koreader';
+import { MOCK_OVERALL_STATS, type OverallStats, type BookStats, type NameValue } from '@/types/koreader'; // Removed ReadingActivityPoint as it's not populated yet
 import { Button } from '@/components/ui/button';
 import { useToast } from "@/hooks/use-toast";
-// Import types from sql.js for type checking, not for runtime.
 import type { SqlJsStatic, Database as SQLJsDatabaseType } from 'sql.js';
 
-
-// Helper functions previously in server-side flow, now client-side
-function parseBookTitle(contentId: string | null | undefined): string {
-  if (!contentId) {
-    console.warn(`[ClientProcess] parseBookTitle received null or undefined content_id.`);
-    return "Unknown Title (Invalid Input)";
-  }
-  try {
-    let pathPart = contentId;
-    // Example: (doc: /mnt/onboard/Books/My Great Book.epub).lua
-    if (contentId.startsWith("(doc: ") && contentId.endsWith(").lua")) {
-      pathPart = contentId.substring(6, contentId.length - 5);
-    }
-    const parts = pathPart.split('/');
-    const fileNameWithExt = parts[parts.length - 1];
-    const lastDotIndex = fileNameWithExt.lastIndexOf('.');
-    if (lastDotIndex > 0) {
-      return fileNameWithExt.substring(0, lastDotIndex);
-    }
-    if (fileNameWithExt === "") {
-        console.warn(`[ClientProcess] parseBookTitle resulted in empty title for content_id: ${contentId}`);
-        return "Unknown Title (Empty Filename)";
-    }
-    return fileNameWithExt; // Return filename if no extension found (e.g. for directories)
-  } catch (e) {
-    console.warn(`[ClientProcess] Error parsing book title from content_id: ${contentId}`, e);
-    return "Unknown Title (Parse Error)";
-  }
-}
-
+// Helper function to parse total_pages from a JSON string (notes column)
 function parseTotalPages(notes: string | null | undefined): number {
   if (!notes) return 0;
   try {
@@ -59,6 +29,29 @@ function parseTotalPages(notes: string | null | undefined): number {
   }
 }
 
+// Helper function to parse timestamps (unix or string)
+function parseTimestampToDate(timestamp: any): Date | undefined {
+    if (timestamp == null) return undefined;
+
+    // If it's a number, assume Unix timestamp (try seconds then milliseconds)
+    if (typeof timestamp === 'number') {
+        if (timestamp > 100000000000) { // Likely milliseconds
+            return new Date(timestamp);
+        }
+        return new Date(timestamp * 1000); // Likely seconds
+    }
+    // If it's a string, try parsing directly
+    if (typeof timestamp === 'string') {
+        const date = new Date(timestamp);
+        if (!isNaN(date.getTime())) {
+            return date;
+        }
+    }
+    console.warn(`[ClientProcess] Could not parse timestamp: ${timestamp}`);
+    return undefined;
+}
+
+
 export default function Home() {
   const { isFileLoaded, setIsFileLoaded } = useFileLoad();
   const [dashboardData, setDashboardData] = useState<OverallStats | null>(MOCK_OVERALL_STATS);
@@ -66,12 +59,11 @@ export default function Home() {
   const { toast } = useToast();
 
   const processDbClientSide = async (fileBuffer: ArrayBuffer): Promise<OverallStats> => {
-    console.log('[ClientProcess] Starting client-side DB processing...');
+    console.log('[ClientProcess] Starting client-side DB processing with new schema...');
     let SQL: SqlJsStatic | null = null;
     let db: SQLJsDatabaseType | null = null;
 
     try {
-      // Dynamically import initSqlJs
       const sqlJsModule = await import('sql.js');
       console.log('[ClientProcess] sql.js module loaded:', sqlJsModule);
       const initSqlJs = sqlJsModule.default;
@@ -86,7 +78,7 @@ export default function Home() {
       SQL = await initSqlJs({
         locateFile: file => {
           const path = `https://sql.js.org/dist/${file}`;
-          console.log(`[ClientProcess] locateFile requesting: ${path}`); // Log the path being requested
+          console.log(`[ClientProcess] locateFile requesting: ${path}`);
           return path;
         }
       });
@@ -95,7 +87,7 @@ export default function Home() {
           console.error('[ClientProcess] SQL.js failed to initialize (SQL object is null/undefined).');
           throw new Error('SQL.js failed to initialize.');
       }
-      console.log('[ClientProcess] SQL.js initialized successfully. SQL object:', SQL);
+      console.log('[ClientProcess] SQL.js initialized successfully.');
 
       const uint8Array = new Uint8Array(fileBuffer);
       db = new SQL.Database(uint8Array);
@@ -105,7 +97,7 @@ export default function Home() {
       }
       console.log('[ClientProcess] Database opened.');
 
-      // Log all table names
+      // Log all table names for verification
       const tablesStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table';");
       const tableNames: string[] = [];
       while(tablesStmt.step()) {
@@ -115,135 +107,115 @@ export default function Home() {
       tablesStmt.free();
       console.log('[ClientProcess] Tables in the database:', tableNames);
 
-      if (!tableNames.includes('bookmark')) {
-        console.error(`[ClientProcess] Critical: Table 'bookmark' not found in the database. Available tables: ${tableNames.join(', ')}`);
-        throw new Error("Table 'bookmark' not found. Check if this is a valid KoReader metadata.sqlite file.");
+      if (!tableNames.includes('book')) {
+        console.error(`[ClientProcess] Critical: Table 'book' not found. Available tables: ${tableNames.join(', ')}`);
+        throw new Error("Table 'book' not found. Check if this is a valid KoReader metadata.sqlite file.");
       }
+      if (!tableNames.includes('page_stat_data')) {
+        console.warn(`[ClientProcess] Warning: Table 'page_stat_data' not found. Total pages per book might be inaccurate.`);
+      }
+
+      // Fetch total pages from page_stat_data
+      const bookIdToTotalPages = new Map<string, number>();
+      if (tableNames.includes('page_stat_data')) {
+        const pageStatDataStmt = db.prepare(`
+            SELECT id_book, MAX(total_pages) as book_total_pages 
+            FROM page_stat_data 
+            GROUP BY id_book
+        `);
+        console.log('[ClientProcess] Prepared SQL statement for page_stat_data table.');
+        while(pageStatDataStmt.step()) {
+            const row = pageStatDataStmt.getAsObject();
+            if (row.id_book && row.book_total_pages != null) {
+                bookIdToTotalPages.set(row.id_book as string, row.book_total_pages as number);
+            }
+        }
+        pageStatDataStmt.free();
+        console.log(`[ClientProcess] Populated bookIdToTotalPages map with ${bookIdToTotalPages.size} entries.`);
+      }
+
 
       const allBookStats: BookStats[] = [];
+      const bookQuery = `
+        SELECT 
+          id, 
+          title, 
+          pages, 
+          total_read_time, 
+          last_open,
+          notes 
+        FROM book
+      `;
+      console.log(`[ClientProcess] Executing query for 'book' table: ${bookQuery}`);
+      const bookStmt = db.prepare(bookQuery);
       
-      const countStmt = db.prepare(`SELECT COUNT(*) as count FROM bookmark`);
-      let totalRowsInTable = 0;
-      if (countStmt.step()) {
-          totalRowsInTable = countStmt.getAsObject().count as number;
+      let rowCount = 0;
+      while (bookStmt.step()) { 
+        rowCount++;
+        const row = bookStmt.getAsObject(); 
+
+        if (rowCount <= 5 || rowCount % 100 === 0) {
+          console.log(`[ClientProcess] Processing book row ${rowCount}: id='${row.id}', title='${row.title}', pages=${row.pages}, total_read_time=${row.total_read_time}, last_open=${row.last_open}, notes_length=${(row.notes as string)?.length}`);
+        }
+        
+        if (!row.title || (row.title as string).trim() === '') {
+          console.warn(`[ClientProcess] Skipping book with empty title, id: ${row.id}`);
+          continue;
+        }
+
+        const bookId = row.id as string;
+        const title = row.title as string;
+        
+        let totalPages = bookIdToTotalPages.get(bookId) || 0;
+        if (totalPages === 0 && row.notes) {
+          totalPages = parseTotalPages(row.notes as string | null);
+        }
+
+        const pagesRead = row.pages != null ? Number(row.pages) : 0;
+        const totalTimeMinutes = row.total_read_time != null ? Math.round(Number(row.total_read_time) / 60) : 0;
+        const lastSessionDate = parseTimestampToDate(row.last_open);
+        
+        const bookStat: BookStats = {
+          title: title,
+          totalPagesRead: pagesRead > totalPages && totalPages > 0 ? totalPages : pagesRead, // Cap pagesRead at totalPages
+          totalPages: totalPages,
+          totalTimeMinutes: totalTimeMinutes,
+          sessions: totalTimeMinutes > 0 ? 1 : 0, // Simplified session count
+          firstSessionDate: lastSessionDate, // Placeholder, using last_open for now
+          lastSessionDate: lastSessionDate,
+        };
+        allBookStats.push(bookStat);
       }
-      countStmt.free();
-      console.log(`[ClientProcess] Total rows in bookmark table (unfiltered): ${totalRowsInTable}`);
-
-      if (totalRowsInTable === 0) {
-          console.warn('[ClientProcess] No rows found in bookmark table.');
-      } else {
-          const stmt = db.prepare(`
-            SELECT 
-              content_id, 
-              progress, 
-              page, 
-              notes, 
-              datetime
-            FROM bookmark
-          `);
-          
-          console.log('[ClientProcess] Prepared SQL statement for bookmark table.');
-
-          let rowCount = 0;
-          let loopEntered = false;
-
-          while (stmt.step()) { 
-            loopEntered = true;
-            rowCount++;
-            const row = stmt.getAsObject(); 
-
-            if (rowCount <= 5 || rowCount % 100 === 0) {
-              console.log(`[ClientProcess] Processing row ${rowCount}: content_id='${row.content_id}', progress=${row.progress}, page=${row.page}, notes (length)=${(row.notes as string)?.length}, datetime=${row.datetime}`);
-            }
-            
-            if (!row.content_id || (row.content_id as string).trim() === '') {
-              continue;
-            }
-
-            const title = parseBookTitle(row.content_id as string);
-            const totalPages = parseTotalPages(row.notes as string | null);
-            let pagesRead = 0;
-            
-            if (totalPages > 0 && row.progress != null && typeof row.progress === 'number' && !isNaN(row.progress as number)) {
-              pagesRead = Math.round((row.progress as number) * totalPages);
-            } else if (row.page != null && typeof row.page === 'number' && !isNaN(row.page as number)) {
-              pagesRead = row.page as number;
-            }
-            
-            if (totalPages > 0 && pagesRead > totalPages) pagesRead = totalPages;
-            if (pagesRead < 0) pagesRead = 0;
-
-            let lastSessionJsDate: Date | undefined = undefined;
-            if (row.datetime != null && typeof row.datetime === 'number') { 
-              lastSessionJsDate = new Date(row.datetime * 1000);
-            } else if (row.datetime != null && typeof row.datetime === 'string') {
-              const parsedDate = new Date(row.datetime);
-              if (!isNaN(parsedDate.getTime())) {
-                lastSessionJsDate = parsedDate;
-              } else {
-                  console.warn(`[ClientProcess] Could not parse datetime string: ${row.datetime} for title ${title}`);
-              }
-            }
-            
-            const bookStat: BookStats = {
-              title: title,
-              totalPagesRead: pagesRead,
-              totalPages: totalPages > 0 ? totalPages : 0, 
-              lastSessionDate: lastSessionJsDate,
-              totalTimeMinutes: 0, 
-              sessions: 0, 
-              firstSessionDate: undefined, 
-            };
-            allBookStats.push(bookStat);
-          }
-          stmt.free();
-          if (!loopEntered && totalRowsInTable > 0) {
-              console.warn('[ClientProcess] stmt.step() never returned true, but totalRowsInTable > 0. This might indicate an issue with the query or DB state.');
-          }
-          console.log(`[ClientProcess] Finished processing ${rowCount} rows from bookmark table query.`);
-      }
+      bookStmt.free();
+      console.log(`[ClientProcess] Finished processing ${rowCount} rows from book table.`);
       
       console.log(`[ClientProcess] Found ${allBookStats.length} book stat entries after processing.`);
       if (allBookStats.length > 0) {
           console.log('[ClientProcess] First processed book details:', JSON.stringify(allBookStats[0], null, 2));
-          if (allBookStats.length > 1) {
-            console.log('[ClientProcess] Second processed book details:', JSON.stringify(allBookStats[1], null, 2));
-          }
       }
 
-      const uniqueBooks = new Map<string, BookStats>();
-      allBookStats.forEach(stat => {
-          const existing = uniqueBooks.get(stat.title);
-          if (!existing || (stat.lastSessionDate && (!existing.lastSessionDate || stat.lastSessionDate > existing.lastSessionDate))) {
-              uniqueBooks.set(stat.title, stat);
-          } else if (!existing && !stat.lastSessionDate && !existing?.lastSessionDate) { 
-             uniqueBooks.set(stat.title, stat);
-          } else if (!existing) { 
-              uniqueBooks.set(stat.title, stat);
-          } else if (!existing.lastSessionDate && stat.lastSessionDate) { // Existing has no date, new one does
-              uniqueBooks.set(stat.title, stat);
-          }
-      });
-      const finalBookStats = Array.from(uniqueBooks.values());
-      console.log(`[ClientProcess] Found ${finalBookStats.length} unique books after filtering.`);
-
-      const overallTotalPagesRead = finalBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
+      const overallTotalPagesRead = allBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
+      const overallTotalTimeMinutes = allBookStats.reduce((sum, book) => sum + book.totalTimeMinutes, 0);
+      const overallTotalSessions = allBookStats.reduce((sum, book) => sum + book.sessions, 0);
       
-      const pagesReadPerBookData: NameValue[] = finalBookStats
+      const pagesReadPerBookData: NameValue[] = allBookStats
           .map(b => ({ name: b.title, value: b.totalPagesRead }))
-          .filter(b => b.value > 0 || finalBookStats.find(fb => fb.title === b.name && fb.totalPages > 0));
+          .filter(b => b.value > 0 || allBookStats.find(fb => fb.title === b.name && fb.totalPages > 0));
+
+      const timeSpentPerBookData: NameValue[] = allBookStats
+          .map(b => ({ name: b.title, value: b.totalTimeMinutes }))
+          .filter(b => b.value > 0);
 
       const result: OverallStats = {
-        totalBooks: uniqueBooks.size,
+        totalBooks: allBookStats.length,
         totalPagesRead: overallTotalPagesRead,
-        totalTimeMinutes: 0, 
-        totalSessions: 0,   
-        readingActivity: [], 
+        totalTimeMinutes: overallTotalTimeMinutes, 
+        totalSessions: overallTotalSessions,   
+        readingActivity: [], // Placeholder
         pagesReadPerBook: pagesReadPerBookData,
-        timeSpentPerBook: [], 
-        monthlySummaries: [], 
-        allBookStats: finalBookStats,
+        timeSpentPerBook: timeSpentPerBookData, 
+        monthlySummaries: [], // Placeholder
+        allBookStats: allBookStats,
       };
       console.log('[ClientProcess] Returning OverallStats:', JSON.stringify(result, null, 2));
       return result;
@@ -340,5 +312,4 @@ export default function Home() {
     </>
   );
 }
-
-      
+    
