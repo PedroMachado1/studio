@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 import { OverallStats, type MonthlyReadingSummary } from "@/types/koreader";
 import { MetricCard } from "./MetricCard";
 import { ReadingChart } from "./ReadingChart";
-import { BookOpen, Clock, Repeat, BarChart3, LineChart as LineChartIcon, BookCopy, CalendarClock } from "lucide-react";
+import { BookOpen, Clock, Repeat, BarChart3, LineChart as LineChartIcon, BookCopy, CalendarClock, Check } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -41,10 +41,9 @@ export function Dashboard({ data }: DashboardProps) {
 
   useEffect(() => {
     if (monthlySummaries && monthlySummaries.length > 0) {
-      // Assuming summaries are chronologically sorted, reverse to show recent first in dropdown
       const months = [...monthlySummaries].map(s => s.monthYear).reverse();
       setAvailableMonths(months);
-      setSelectedMonth(months[0]); // Default to the most recent month (which is now first after reverse)
+      setSelectedMonth(months[0]); 
     }
   }, [monthlySummaries]);
 
@@ -106,8 +105,17 @@ export function Dashboard({ data }: DashboardProps) {
                   {currentMonthData.booksRead.length > 0 ? (
                     <ul className="space-y-2">
                       {currentMonthData.booksRead.map((book, index) => (
-                        <li key={index} className="text-sm text-muted-foreground p-2 bg-card rounded-md shadow-sm">
-                          {book.title}
+                        <li 
+                          key={index} 
+                          className="text-sm text-muted-foreground p-3 bg-card rounded-md shadow-sm flex justify-between items-center"
+                        >
+                          <div className="flex items-center">
+                            <span className="mr-2">{book.title}</span>
+                            {book.completedInMonth && (
+                              <Check className="h-4 w-4 text-accent" title="Completed this month" />
+                            )}
+                          </div>
+                          <span className="font-medium text-foreground">{book.pagesReadInMonth.toLocaleString()} pages</span>
                         </li>
                       ))}
                     </ul>
