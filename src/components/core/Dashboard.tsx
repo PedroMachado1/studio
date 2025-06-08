@@ -3,9 +3,10 @@
 
 import type React from 'react';
 import { useState, useEffect } from 'react';
-import { OverallStats, type MonthlyReadingSummary } from "@/types/koreader";
+import { OverallStats, type MonthlyReadingSummary, type BookStats } from "@/types/koreader";
 import { MetricCard } from "./MetricCard";
 import { ReadingChart } from "./ReadingChart";
+import { Progress } from "@/components/ui/progress";
 import { BookOpen, Clock, Repeat, BarChart3, LineChart as LineChartIcon, BookCopy, CalendarClock, Check } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -34,14 +35,14 @@ export function Dashboard({ data }: DashboardProps) {
     { name: "time", color: "chart-2", icon: Clock }
   ];
 
-  const { monthlySummaries } = data;
+  const { monthlySummaries, allBookStats } = data;
   const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [currentMonthData, setCurrentMonthData] = useState<MonthlyReadingSummary | null>(null);
 
   useEffect(() => {
     if (monthlySummaries && monthlySummaries.length > 0) {
-      const months = [...monthlySummaries].map(s => s.monthYear).reverse();
+      const months = [...monthlySummaries].map(s => s.monthYear).reverse(); // Show newest first
       setAvailableMonths(months);
       setSelectedMonth(months[0]); 
     }
@@ -69,7 +70,7 @@ export function Dashboard({ data }: DashboardProps) {
       </section>
 
       {/* Monthly Reading Summary Section */}
-      {monthlySummaries && monthlySummaries.length > 0 && (
+      {monthlySummaries && monthlySummaries.length > 0 && allBookStats && (
         <section aria-labelledby="monthly-summary-title">
           <div className="flex items-center gap-2 mb-6 mt-10">
             <CalendarClock className="h-7 w-7 text-primary" />
@@ -103,21 +104,39 @@ export function Dashboard({ data }: DashboardProps) {
                 <div>
                   <h3 className="text-lg font-semibold mb-3 text-foreground">Books Active This Month</h3>
                   {currentMonthData.booksRead.length > 0 ? (
-                    <ul className="space-y-2">
-                      {currentMonthData.booksRead.map((book, index) => (
-                        <li 
-                          key={index} 
-                          className="text-sm text-muted-foreground p-3 bg-card rounded-md shadow-sm flex justify-between items-center"
-                        >
-                          <div className="flex items-center">
-                            <span className="mr-2">{book.title}</span>
-                            {book.completedInMonth && (
-                              <Check className="h-4 w-4 text-accent" title="Completed this month" />
+                    <ul className="space-y-4">
+                      {currentMonthData.booksRead.map((bookActivity, index) => {
+                        const overallBookStat = allBookStats.find(b => b.title === bookActivity.title);
+                        const percentage = overallBookStat && overallBookStat.totalPages > 0 
+                          ? Math.round((overallBookStat.totalPagesRead / overallBookStat.totalPages) * 100) 
+                          : 0;
+
+                        return (
+                          <li 
+                            key={index} 
+                            className="text-sm text-muted-foreground p-4 bg-card rounded-md shadow-sm space-y-2"
+                          >
+                            <div className="flex justify-between items-center">
+                              <span className="font-semibold text-base text-foreground">{bookActivity.title}</span>
+                              {bookActivity.completedInMonth && (
+                                <span className="flex items-center text-xs bg-accent/20 text-accent-foreground py-0.5 px-2 rounded-full">
+                                  <Check className="h-3.5 w-3.5 mr-1 text-accent" /> Completed this month
+                                </span>
+                              )}
+                            </div>
+                            <p>Pages this month: <span className="font-medium text-foreground">{bookActivity.pagesReadInMonth.toLocaleString()}</span></p>
+                            {overallBookStat && (
+                              <>
+                                <p>Overall: <span className="font-medium text-foreground">{overallBookStat.totalPagesRead.toLocaleString()} / {overallBookStat.totalPages.toLocaleString()} pages</span></p>
+                                <div className="flex items-center gap-2">
+                                  <Progress value={percentage} className="w-full h-2" aria-label={`${percentage}% complete`} />
+                                  <span className="text-xs font-medium text-foreground">{percentage}%</span>
+                                </div>
+                              </>
                             )}
-                          </div>
-                          <span className="font-medium text-foreground">{book.pagesReadInMonth.toLocaleString()} pages</span>
-                        </li>
-                      ))}
+                          </li>
+                        );
+                      })}
                     </ul>
                   ) : (
                     <p className="text-sm text-muted-foreground">No specific books tracked for this month in the demo data.</p>
