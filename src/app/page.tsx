@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useFileLoad } from '@/context/FileLoadContext';
 import { FileUploader } from '@/components/core/FileUploader';
 import { Dashboard } from '@/components/core/Dashboard';
-import { MOCK_OVERALL_STATS, type OverallStats, type BookStats, type NameValue } from '@/types/koreader';
+import type { OverallStats, BookStats, NameValue, ReadingActivityPoint } from '@/types/koreader';
 import { Button } from '@/components/ui/button';
 import { useToast } from "@/hooks/use-toast";
 import type { SqlJsStatic, Database as SQLJsDatabaseType } from 'sql.js';
@@ -18,12 +18,10 @@ function parseTotalPages(notes: string | null | undefined): number {
     const parsedNotes = JSON.parse(notes);
     const total = Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || parsedNotes.statistics?.total_pages || 0);
     if (isNaN(total)) {
-        // console.warn(`[ClientProcess] Parsed total pages is NaN from notes: ${notes}`);
         return 0;
     }
     return total;
   } catch (e) {
-    // console.warn(`[ClientProcess] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e instanceof Error ? e.message : String(e)}`);
     return 0;
   }
 }
@@ -32,16 +30,11 @@ function parseTotalPages(notes: string | null | undefined): number {
 function parseTimestampToDate(timestamp: any): Date | undefined {
     if (timestamp == null) return undefined;
     if (typeof timestamp === 'number') {
-        // Check if it's likely seconds (common for Unix timestamps) or milliseconds
-        // A common heuristic: if timestamp > 1 Jan 2000 in ms and < 1 Jan 2050 in s
-        if (timestamp > 946684800000 && timestamp < (new Date('2050-01-01').getTime())) { // Likely milliseconds
+        if (timestamp > 946684800000 && timestamp < (new Date('2050-01-01').getTime())) { 
             return new Date(timestamp);
-        } else if (timestamp > 946684800 && timestamp < (new Date('2050-01-01').getTime() / 1000) ) { // Likely seconds
+        } else if (timestamp > 946684800 && timestamp < (new Date('2050-01-01').getTime() / 1000) ) { 
              return new Date(timestamp * 1000);
         }
-        // If it's a very large number, it's probably already ms. If small, assume seconds.
-        // This is a guess; KoReader might store in seconds.
-        // If timestamp string length > 10, likely ms. Unix seconds usually 10 digits.
         if (String(timestamp).length > 10) {
             return new Date(timestamp);
         }
@@ -52,7 +45,6 @@ function parseTimestampToDate(timestamp: any): Date | undefined {
         if (!isNaN(date.getTime())) {
             return date;
         }
-        // Try parsing as number if string is numeric
         const numTimestamp = Number(timestamp);
         if (!isNaN(numTimestamp)) {
             if (String(numTimestamp).length > 10) {
@@ -61,14 +53,13 @@ function parseTimestampToDate(timestamp: any): Date | undefined {
             return new Date(numTimestamp * 1000);
         }
     }
-    // console.warn(`[ClientProcess] Could not parse timestamp: ${timestamp}`);
     return undefined;
 }
 
 
 export default function Home() {
-  const { isFileLoaded, setIsFileLoaded } = useFileLoad();
-  const [dashboardData, setDashboardData] = useState<OverallStats | null>(null);
+  const { isFileLoaded, setIsFileLoaded, setLoadedStats } = useFileLoad();
+  const [dashboardData, setDashboardData] = useState<OverallStats | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [dashboardKey, setDashboardKey] = useState(Date.now().toString());
   const { toast } = useToast();
@@ -171,7 +162,6 @@ export default function Home() {
         }
         
         if (!row.title || (row.title as string).trim() === '') {
-          // console.warn(`[ClientProcess] Skipping book with empty title, id: ${row.id}`);
           continue;
         }
 
@@ -245,22 +235,28 @@ export default function Home() {
       if (db) {
           console.log('[ClientProcess] Closing DB connection.');
           db.close();
-      } else {
-          // console.log('[ClientProcess] DB connection was not established or already closed.');
       }
     }
   };
 
   const handleFileLoad = async (fileBuffer?: ArrayBuffer) => {
     if (!fileBuffer) { 
-      setIsFileLoaded(true); 
-      setDashboardData(MOCK_OVERALL_STATS);
-      setDashboardKey(Date.now().toString());
-      console.log('[Home Page] No file buffer, using MOCK_OVERALL_STATS.');
+      // This case is for "Load Sample Data" which is effectively removed by removing MOCK_OVERALL_STATS
+      // Now, if no file buffer, we do nothing, user must upload a file.
+      // Or, if you want a specific "no file loaded" state, handle it here.
+      // For now, this path won't be hit by FileUploader.
+      console.log('[Home Page] No file buffer provided to handleFileLoad.');
+      // setDashboardData(undefined); // Ensure it's undefined
+      // setLoadedStats(undefined);
+      // setIsFileLoaded(false); // Not strictly necessary to change isFileLoaded here if no buffer
       return;
     }
 
     setIsLoading(true);
+    setDashboardData(undefined); // Clear previous data
+    setLoadedStats(undefined);   // Clear previous data in context
+    setIsFileLoaded(false);      // Set to false until processing finishes
+
     toast({
       title: "Processing your KoReader data...",
       description: "This may take a moment (client-side).",
@@ -271,20 +267,18 @@ export default function Home() {
       const processedStats = await processDbClientSide(fileBuffer);
       console.log('[Home Page] Received processedStats from client-side function:', JSON.stringify(processedStats, null, 2));
       
+      setDashboardData(processedStats);
+      setLoadedStats(processedStats);
+      setIsFileLoaded(true);
+      setDashboardKey(Date.now().toString());
+
       if (!processedStats || (processedStats.totalBooks === 0 && processedStats.allBookStats.length === 0 && processedStats.totalPagesRead === 0) ) {
-        // console.warn('[Home Page] Processed stats appear to be empty or minimal.');
-        setDashboardData(processedStats); 
-        setIsFileLoaded(true);
-        setDashboardKey(Date.now().toString());
         toast({
           title: "Data Processed",
-          description: "Successfully processed the file, but no significant reading data was found. The displayed data might be minimal or empty. Please check your KoReader file or the browser console for details.",
+          description: "Successfully processed the file, but no significant reading data was found. The displayed data might be minimal or empty.",
           duration: 9000, 
         });
       } else {
-        setDashboardData(processedStats);
-        setIsFileLoaded(true);
-        setDashboardKey(Date.now().toString());
         toast({
           title: "Data Processed Successfully!",
           description: "Displaying your KoReader statistics (processed client-side).",
@@ -292,12 +286,13 @@ export default function Home() {
       }
     } catch (error) {
       console.error("[Home Page] Error in handleFileLoad's try block (client-side processing):", error);
-      setDashboardData(MOCK_OVERALL_STATS); 
-      setIsFileLoaded(true);
-      setDashboardKey(Date.now().toString());
+      setDashboardData(undefined); 
+      setLoadedStats(undefined);
+      setIsFileLoaded(true); // Still set to true to show the "Load Another File" button
+      setDashboardKey(Date.now().toString()); // Re-key to clear dashboard if it was showing old data
       toast({
         title: "Error Processing File Client-Side",
-        description: `Could not process the KoReader data. ${error instanceof Error ? error.message : String(error)}. Showing sample data. Check browser console.`,
+        description: `Could not process the KoReader data. ${error instanceof Error ? error.message : String(error)}. Please try again or check the console.`,
         variant: "destructive",
         duration: 9000,
       });
@@ -309,17 +304,18 @@ export default function Home() {
 
   const handleReset = () => {
     setIsFileLoaded(false);
-    setDashboardData(null); 
+    setDashboardData(undefined); 
+    setLoadedStats(undefined);
     setDashboardKey(Date.now().toString());
   };
 
   return (
     <>
-      {!isFileLoaded ? (
+      {!isFileLoaded || !dashboardData ? (
         <FileUploader onFileLoad={handleFileLoad} />
       ) : (
         <>
-          <Dashboard key={dashboardKey} data={dashboardData || MOCK_OVERALL_STATS} />
+          {dashboardData && <Dashboard key={dashboardKey} data={dashboardData} />}
           <div className="container mx-auto text-center py-8">
             <Button onClick={handleReset} variant="outline" disabled={isLoading}>
               {isLoading ? "Processing..." : "Load Another File"}
@@ -330,4 +326,3 @@ export default function Home() {
     </>
   );
 }
-    
