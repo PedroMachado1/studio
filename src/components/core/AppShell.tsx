@@ -17,8 +17,21 @@ import {
 } from "@/components/ui/sidebar";
 import { Header as PageHeader } from '@/components/core/Header';
 import { BookMarked, LayoutDashboard, Library } from 'lucide-react';
+import { useFileLoad } from '@/context/FileLoadContext';
+
+// Helper component for the footer to avoid duplication
+function AppFooter() {
+  return (
+    <footer className="py-4 px-4 md:px-6 border-t border-border bg-card">
+      <div className="container mx-auto text-center text-xs text-muted-foreground">
+        <p>&copy; {new Date().getFullYear()} KoReader Insight Web. Demo.</p>
+      </div>
+    </footer>
+  );
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const { isFileLoaded } = useFileLoad();
   const pathname = usePathname();
 
   const menuItems = [
@@ -26,6 +39,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { href: "/books", label: "Books", icon: Library, dataTestId: "books-nav" },
   ];
 
+  if (!isFileLoaded) {
+    // Render layout without sidebar
+    return (
+      <div className="flex flex-col min-h-screen w-full">
+        <PageHeader />
+        <main className="flex-grow">
+          {children}
+        </main>
+        <AppFooter />
+      </div>
+    );
+  }
+
+  // Render layout with sidebar
   return (
     <SidebarProvider defaultOpen>
       <Sidebar collapsible="icon" variant="sidebar" side="left" className="bg-sidebar">
@@ -63,14 +90,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </Sidebar>
       <SidebarInset>
         <PageHeader />
-        <main className="flex-grow"> {/* Pages will handle their own padding/containers */}
+        <main className="flex-grow">
           {children}
         </main>
-        <footer className="py-4 px-4 md:px-6 border-t border-border bg-card">
-            <div className="container mx-auto text-center text-xs text-muted-foreground">
-            <p>&copy; {new Date().getFullYear()} KoReader Insight Web. Demo.</p>
-            </div>
-        </footer>
+        <AppFooter />
       </SidebarInset>
     </SidebarProvider>
   );

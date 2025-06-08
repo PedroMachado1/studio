@@ -1,26 +1,26 @@
 
 "use client";
 
-import { useState } from 'react';
+import { useFileLoad } from '@/context/FileLoadContext';
 import { FileUploader } from '@/components/core/FileUploader';
 import { Dashboard } from '@/components/core/Dashboard';
 import { MOCK_OVERALL_STATS } from '@/types/koreader';
 import { Button } from '@/components/ui/button';
 
 export default function Home() {
-  const [showDashboard, setShowDashboard] = useState(false);
+  const { isFileLoaded, setIsFileLoaded } = useFileLoad();
 
   const handleFileLoad = () => {
-    setShowDashboard(true);
+    setIsFileLoaded(true);
   };
 
   const handleReset = () => {
-    setShowDashboard(false);
+    setIsFileLoaded(false);
   };
 
   return (
     <>
-      {!showDashboard ? (
+      {!isFileLoaded ? (
         <FileUploader onFileLoad={handleFileLoad} />
       ) : (
         <>
