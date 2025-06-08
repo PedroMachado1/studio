@@ -11,7 +11,7 @@
 import {z} from 'genkit';
 import type {Database} from 'sql.js';
 import initSqlJs from 'sql.js'; // sql.js version 1.10.3 or higher
-import { OverallStatsSchema, BookStatsSchema, type BookStats, type OverallStats } from '@/ai/schemas/koreader-schemas';
+import { OverallStatsSchema, type BookStats, type OverallStats } from '@/ai/schemas/koreader-schemas';
 
 const ProcessKoreaderDbInputSchema = z.object({
   fileDataUri: z
@@ -25,11 +25,15 @@ export type ProcessKoreaderDbOutput = z.infer<typeof OverallStatsSchema>;
 
 
 // Helper function to parse title from content_id
-function parseBookTitle(contentId: string): string {
-  // Example content_id: "(doc: /storage/emulated/0/Books/My Awesome Book.epub).lua"
-  // Example content_id: "/mnt/media_rw/SDB1/books/Another Great Book.pdf"
+function parseBookTitle(contentId: string | null | undefined): string {
+  if (!contentId) {
+    console.warn(`[processKoreaderDb] parseBookTitle received null or undefined content_id.`);
+    return "Unknown Title (Invalid Input)";
+  }
   try {
     let pathPart = contentId;
+    // Example content_id: "(doc: /storage/emulated/0/Books/My Awesome Book.epub).lua"
+    // Example content_id: "/mnt/media_rw/SDB1/books/Another Great Book.pdf"
     if (contentId.startsWith("(doc: ") && contentId.endsWith(").lua")) {
       pathPart = contentId.substring(6, contentId.length - 5);
     }
@@ -68,7 +72,7 @@ function parseTotalPages(notes: string | null | undefined): number {
   try {
     const parsedNotes = JSON.parse(notes);
     // Check common locations for total_pages or page_count
-    const total = Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || 0);
+    const total = Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || parsedNotes.statistics?.total_pages || 0);
     if (isNaN(total)) {
         console.warn(`[processKoreaderDb] Parsed total pages is NaN from notes: ${notes}`);
         return 0;
@@ -89,6 +93,7 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     SQL = await initSqlJs({
       locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
     });
+
     if (!SQL) {
         console.error('[processKoreaderDb] SQL.js failed to initialize (SQL object is null/undefined).');
         throw new Error('SQL.js failed to initialize.');
@@ -112,17 +117,19 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
 
     const allBookStats: BookStats[] = [];
     
-    const countStmt = db.prepare(`SELECT COUNT(*) as count FROM bookmark WHERE content_id IS NOT NULL AND content_id != ''`);
+    // Diagnostic: Simpler query to count all rows in bookmark table
+    const countStmt = db.prepare(`SELECT COUNT(*) as count FROM bookmark`);
     let totalRowsInTable = 0;
     if (countStmt.step()) {
         totalRowsInTable = countStmt.getAsObject().count as number;
     }
     countStmt.free();
-    console.log(`[processKoreaderDb] Total relevant rows in bookmark table: ${totalRowsInTable}`);
+    console.log(`[processKoreaderDb] Total rows in bookmark table (unfiltered): ${totalRowsInTable}`);
 
     if (totalRowsInTable === 0) {
-        console.warn('[processKoreaderDb] No relevant rows found in bookmark table. Aborting further processing.');
+        console.warn('[processKoreaderDb] No rows found in bookmark table. Aborting further processing.');
     } else {
+        // Diagnostic: Simpler query to fetch data, removing WHERE and ORDER BY for now
         const stmt = db.prepare(`
           SELECT 
             content_id, 
@@ -131,21 +138,29 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
             notes, 
             datetime
           FROM bookmark 
-          WHERE content_id IS NOT NULL AND content_id != '' 
-          ORDER BY content_id, datetime DESC 
         `);
-        console.log('[processKoreaderDb] Prepared SQL statement for bookmark table.');
+        console.log('[processKoreaderDb] Prepared DIAGNOSTIC SQL statement for bookmark table (no WHERE/ORDER BY).');
 
         let rowCount = 0;
+        let loopEntered = false;
 
         while (stmt.step()) {
+          loopEntered = true;
           rowCount++;
           const row = stmt.getAsObject();
 
-          if (rowCount <= 5 || rowCount % 100 === 0) {
+          if (rowCount <= 5 || rowCount % 100 === 0) { // Log first 5 and every 100th
             console.log(`[processKoreaderDb] Processing row ${rowCount}: content_id='${row.content_id}', progress=${row.progress}, page=${row.page}, notes (length)=${(row.notes as string)?.length}, datetime=${row.datetime}`);
           }
           
+          // Skip rows with null or empty content_id as they are not useful
+          if (!row.content_id || (row.content_id as string).trim() === '') {
+            if (rowCount <= 5 || rowCount % 100 === 0) {
+              console.log(`[processKoreaderDb] Skipping row ${rowCount} due to empty/null content_id.`);
+            }
+            continue;
+          }
+
           const title = parseBookTitle(row.content_id as string);
 
           const totalPages = parseTotalPages(row.notes as string | null);
@@ -158,16 +173,16 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
           }
           
           if (totalPages > 0 && pagesRead > totalPages) {
-              pagesRead = totalPages;
+              pagesRead = totalPages; // Cap at total pages
           }
           if (pagesRead < 0) pagesRead = 0;
 
 
           let lastSessionIsoDate: string | undefined = undefined;
-          if (row.datetime != null && typeof row.datetime === 'number') {
+          if (row.datetime != null && typeof row.datetime === 'number') { // Assuming Unix timestamp in seconds
             lastSessionIsoDate = new Date(row.datetime * 1000).toISOString();
           } else if (row.datetime != null && typeof row.datetime === 'string') {
-            const parsedDate = new Date(row.datetime);
+            const parsedDate = new Date(row.datetime); // Try parsing if it's already a date string
             if (!isNaN(parsedDate.getTime())) {
                 lastSessionIsoDate = parsedDate.toISOString();
             } else {
@@ -180,13 +195,16 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
             totalPagesRead: pagesRead,
             totalPages: totalPages > 0 ? totalPages : 0, 
             lastSessionDate: lastSessionIsoDate,
-            totalTimeMinutes: 0, 
-            sessions: 0, 
-            firstSessionDate: undefined, 
+            totalTimeMinutes: 0, // Placeholder
+            sessions: 0, // Placeholder
+            firstSessionDate: undefined, // Placeholder
           };
           allBookStats.push(bookStat);
         }
         stmt.free();
+        if (!loopEntered && totalRowsInTable > 0) {
+            console.warn('[processKoreaderDb] stmt.step() never returned true, but totalRowsInTable > 0. Query might be malformed or table empty after all.');
+        }
         console.log(`[processKoreaderDb] Finished processing ${rowCount} rows from bookmark table query.`);
     }
     
@@ -197,23 +215,36 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     }
 
 
-    const overallTotalPagesRead = allBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
+    // Basic aggregation based on what was extracted
+    const uniqueBooks = new Map<string, BookStats>();
+    allBookStats.forEach(stat => {
+        const existing = uniqueBooks.get(stat.title);
+        if (!existing || (stat.lastSessionDate && existing.lastSessionDate && new Date(stat.lastSessionDate) > new Date(existing.lastSessionDate))) {
+            uniqueBooks.set(stat.title, stat);
+        } else if (!existing) {
+            uniqueBooks.set(stat.title, stat);
+        }
+    });
+    const finalBookStats = Array.from(uniqueBooks.values());
+
+
+    const overallTotalPagesRead = finalBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
     
-    const pagesReadPerBookData = allBookStats
+    const pagesReadPerBookData = finalBookStats
         .map(b => ({ name: b.title, value: b.totalPagesRead }))
-        .filter(b => b.value > 0 || allBookStats.find(ab => ab.title === b.name && ab.totalPages > 0));
+        .filter(b => b.value > 0 || finalBookStats.find(ab => ab.title === b.name && ab.totalPages > 0));
 
 
     const result: ProcessKoreaderDbOutput = {
-      totalBooks: new Set(allBookStats.map(b => b.title)).size,
+      totalBooks: uniqueBooks.size,
       totalPagesRead: overallTotalPagesRead,
-      totalTimeMinutes: 0, 
-      totalSessions: 0,    
-      readingActivity: [], 
+      totalTimeMinutes: 0, // Placeholder
+      totalSessions: 0,    // Placeholder
+      readingActivity: [], // Placeholder
       pagesReadPerBook: pagesReadPerBookData,
-      timeSpentPerBook: [], 
-      monthlySummaries: [], 
-      allBookStats: allBookStats,
+      timeSpentPerBook: [], // Placeholder
+      monthlySummaries: [], // Placeholder
+      allBookStats: finalBookStats,
     };
     console.log('[processKoreaderDb] Returning OverallStats:', JSON.stringify(result, null, 2));
     return result;
@@ -225,6 +256,7 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     if (errorStack) {
         console.error('[processKoreaderDb] Stack trace:', errorStack);
     }
+    // Return empty/default stats on error
     return {
       totalBooks: 0,
       totalPagesRead: 0,
@@ -245,4 +277,3 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     }
   }
 }
-
