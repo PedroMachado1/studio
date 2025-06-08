@@ -41,6 +41,7 @@ function parseBookTitle(contentId: string): string {
     }
     return fileNameWithExt; // Fallback if no extension
   } catch (e) {
+    console.warn(`[processKoreaderDb] Error parsing book title from content_id: ${contentId}`, e);
     return "Unknown Title";
   }
 }
@@ -52,6 +53,7 @@ function safeParseJson(jsonString: string | null | undefined, key: string, defau
     const parsed = JSON.parse(jsonString);
     return parsed[key] || defaultValue;
   } catch (e) {
+    // console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for key '${key}': ${jsonString}. Error: ${e}`);
     return defaultValue;
   }
 }
@@ -64,22 +66,21 @@ function parseTotalPages(notes: string | null | undefined): number {
     // Check common locations for total_pages or page_count
     return parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || 0;
   } catch (e) {
-    // If JSON parsing fails or key not found
-    return 0;
+    // console.warn(`[processKoreaderDb] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e}`);
+    return 0; // If JSON parsing fails or key not found
   }
 }
 
 
 export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<ProcessKoreaderDbOutput> {
+  console.log('[processKoreaderDb] Starting processing...');
   let SQL: any;
   let db: Database | null = null;
   try {
     SQL = await initSqlJs({
-      // Path to WASM file. Genkit might need this served or bundled.
-      // For local dev with `genkit start`, ensure `sql-wasm.wasm` is findable.
-      // It's often in `node_modules/sql.js/dist/sql-wasm.wasm`
-      // locateFile: file => `/node_modules/sql.js/dist/${file}`
+      // sql.js attempts to load sql-wasm.wasm from node_modules in Node.js
     });
+    console.log('[processKoreaderDb] SQL.js initialized.');
 
     if (!input.fileDataUri.includes(',')) {
       throw new Error('Invalid data URI format.');
@@ -89,12 +90,10 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
     const uint8Array = new Uint8Array(fileBuffer);
 
     db = new SQL.Database(uint8Array);
+    console.log('[processKoreaderDb] Database opened.');
 
     const allBookStats: BookStats[] = [];
     
-    // Query the bookmark table (common for KOReader metadata)
-    // Adjust column names if your schema differs.
-    // Common columns: content_id, progress (float 0-1), page (int), notes (JSON string), datetime
     const stmt = db.prepare(`
       SELECT 
         content_id, 
@@ -105,17 +104,17 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
       FROM bookmark 
       ORDER BY content_id, datetime DESC
     `);
+    console.log('[processKoreaderDb] Prepared SQL statement for bookmark table.');
 
     const processedTitles = new Set<string>();
+    let rowCount = 0;
 
     while (stmt.step()) {
+      rowCount++;
       const row = stmt.getAsObject();
       const title = parseBookTitle(row.content_id as string);
 
       if (processedTitles.has(title)) {
-        // We only want the latest entry for each book from the bookmark table
-        // as it usually represents the current state.
-        // More sophisticated logic would be needed for full history / firstSessionDate.
         continue;
       }
       processedTitles.add(title);
@@ -128,7 +127,6 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
         pagesRead = row.page as number;
       }
       
-      // Ensure pagesRead does not exceed totalPages if totalPages is known
       if (totalPages > 0 && pagesRead > totalPages) {
           pagesRead = totalPages;
       }
@@ -136,37 +134,40 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
       const bookStat: BookStats = {
         title: title,
         totalPagesRead: pagesRead,
-        totalPages: totalPages || 0, // Fallback to 0 if not found
+        totalPages: totalPages || 0, 
         lastSessionDate: row.datetime ? new Date(row.datetime as string).toISOString() : undefined,
-        // These are harder to get accurately without more complex queries or tables
         totalTimeMinutes: 0, 
         sessions: 0, 
-        firstSessionDate: row.datetime ? new Date(row.datetime as string).toISOString() : undefined, // Placeholder, actually earliest
+        firstSessionDate: row.datetime ? new Date(row.datetime as string).toISOString() : undefined, 
       };
       allBookStats.push(bookStat);
     }
     stmt.free();
+    console.log(`[processKoreaderDb] Processed ${rowCount} rows from bookmark table.`);
+    console.log(`[processKoreaderDb] Found ${allBookStats.length} unique books.`);
+    if (allBookStats.length > 0) {
+        console.log('[processKoreaderDb] First book details:', JSON.stringify(allBookStats[0], null, 2));
+    }
+
 
     const overallTotalPagesRead = allBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
 
-    // For now, many fields in OverallStats will be empty or simplified
-    // Full implementation requires deeper schema knowledge & more complex logic
-    return {
+    const result: ProcessKoreaderDbOutput = {
       totalBooks: allBookStats.length,
       totalPagesRead: overallTotalPagesRead,
-      totalTimeMinutes: 0, // Placeholder
-      totalSessions: 0,    // Placeholder
-      readingActivity: [], // Placeholder
+      totalTimeMinutes: 0, 
+      totalSessions: 0,    
+      readingActivity: [], 
       pagesReadPerBook: allBookStats.map(b => ({name: b.title, value: b.totalPagesRead})),
-      timeSpentPerBook: [], // Placeholder
-      monthlySummaries: [], // Placeholder
+      timeSpentPerBook: [], 
+      monthlySummaries: [], 
       allBookStats: allBookStats,
     };
+    console.log('[processKoreaderDb] Returning OverallStats:', JSON.stringify(result, null, 2));
+    return result;
 
   } catch (error) {
-    console.error('Error processing KoReader DB:', error);
-    // Return a default/empty stats object or throw, depending on desired error handling
-    // For robustness, let's return a minimal valid structure.
+    console.error('[processKoreaderDb] Error processing KoReader DB:', error);
     return {
       totalBooks: 0,
       totalPagesRead: 0,
@@ -179,6 +180,7 @@ export async function processKoreaderDb(input: ProcessKoreaderDbInput): Promise<
       allBookStats: [],
     };
   } finally {
+    console.log('[processKoreaderDb] Closing DB connection if open.');
     db?.close();
   }
 }

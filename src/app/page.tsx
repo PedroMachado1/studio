@@ -32,10 +32,8 @@ export default function Home() {
 
   const handleFileLoad = async (fileBuffer?: ArrayBuffer) => {
     if (!fileBuffer) {
-      // This case might happen if the user cancels file selection or if
-      // we call this without a file (e.g. for mock data, though that path is changing)
-      setIsFileLoaded(true); // Still show dashboard with mock/previous data
-      setDashboardData(MOCK_OVERALL_STATS); // Or keep current dashboardData
+      setIsFileLoaded(true); 
+      setDashboardData(MOCK_OVERALL_STATS); 
       return;
     }
 
@@ -44,37 +42,49 @@ export default function Home() {
       title: "Processing your KoReader data...",
       description: "This may take a moment.",
     });
+    console.log('[Home Page] File buffer received, starting processing.');
 
     try {
       const dataUri = arrayBufferToDataUri(fileBuffer);
+      console.log('[Home Page] Converted file to data URI, calling processKoreaderDb.');
       const processedStats: ProcessKoreaderDbOutput = await processKoreaderDb({ fileDataUri: dataUri });
+      console.log('[Home Page] Received processedStats from server:', JSON.stringify(processedStats, null, 2));
       
-      // Convert Zod schema output to TypeScript type if necessary, or ensure they are compatible
-      // For this example, assuming ProcessKoreaderDbOutput is compatible with OverallStats type
-      setDashboardData(processedStats as OverallStats);
-      setIsFileLoaded(true);
-      toast({
-        title: "Data Processed Successfully!",
-        description: "Displaying your KoReader statistics.",
-      });
+      if (!processedStats || (processedStats.totalBooks === 0 && processedStats.allBookStats.length === 0 && processedStats.totalPagesRead === 0) ) {
+        console.warn('[Home Page] Processed stats appear to be empty or minimal.');
+        setDashboardData(processedStats as OverallStats); // Set dashboard with (potentially empty) processed data
+        setIsFileLoaded(true);
+        toast({
+          title: "Data Processed",
+          description: "Successfully processed the file, but no significant reading data was found. The displayed data might be minimal or empty. Please check your KoReader file or the server console for details.",
+          duration: 9000, 
+        });
+      } else {
+        setDashboardData(processedStats as OverallStats);
+        setIsFileLoaded(true);
+        toast({
+          title: "Data Processed Successfully!",
+          description: "Displaying your KoReader statistics.",
+        });
+      }
     } catch (error) {
-      console.error("Error processing KoReader data:", error);
+      console.error("[Home Page] Error in handleFileLoad's try block:", error);
       setDashboardData(MOCK_OVERALL_STATS); // Fallback to mock data on error
-      setIsFileLoaded(true); // Still show dashboard, but with mock data
+      setIsFileLoaded(true); 
       toast({
         title: "Error Processing File",
-        description: "Could not process the KoReader data. Showing sample data instead.",
+        description: "Could not process the KoReader data. Showing sample data instead. Check browser console for details.",
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
+      console.log('[Home Page] handleFileLoad finished.');
     }
   };
 
   const handleReset = () => {
     setIsFileLoaded(false);
-    setDashboardData(MOCK_OVERALL_STATS); // Reset to mock data
-    // Potentially reset other data states
+    setDashboardData(MOCK_OVERALL_STATS); 
   };
 
   return (
