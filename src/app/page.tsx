@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useFileLoad } from '@/context/FileLoadContext';
 import { FileUploader } from '@/components/core/FileUploader';
 import { Dashboard } from '@/components/core/Dashboard';
-import { MOCK_OVERALL_STATS, type OverallStats, type BookStats, type NameValue } from '@/types/koreader'; // Removed ReadingActivityPoint as it's not populated yet
+import { MOCK_OVERALL_STATS, type OverallStats, type BookStats, type NameValue } from '@/types/koreader';
 import { Button } from '@/components/ui/button';
 import { useToast } from "@/hooks/use-toast";
 import type { SqlJsStatic, Database as SQLJsDatabaseType } from 'sql.js';
@@ -16,7 +16,6 @@ function parseTotalPages(notes: string | null | undefined): number {
   if (!notes) return 0;
   try {
     const parsedNotes = JSON.parse(notes);
-    // Try various common keys where total_pages might be stored
     const total = Number(parsedNotes.total_pages || parsedNotes.page_count || parsedNotes.doc_props?.total_pages || parsedNotes.statistics?.total_pages || 0);
     if (isNaN(total)) {
         console.warn(`[ClientProcess] Parsed total pages is NaN from notes: ${notes}`);
@@ -25,26 +24,41 @@ function parseTotalPages(notes: string | null | undefined): number {
     return total;
   } catch (e) {
     // console.warn(`[ClientProcess] Failed to parse 'notes' JSON for total pages: ${notes}. Error: ${e instanceof Error ? e.message : String(e)}`);
-    return 0; // Return 0 if notes is not valid JSON or doesn't contain page info
+    return 0;
   }
 }
 
 // Helper function to parse timestamps (unix or string)
 function parseTimestampToDate(timestamp: any): Date | undefined {
     if (timestamp == null) return undefined;
-
-    // If it's a number, assume Unix timestamp (try seconds then milliseconds)
     if (typeof timestamp === 'number') {
-        if (timestamp > 100000000000) { // Likely milliseconds
+        // Check if it's likely seconds (common for Unix timestamps) or milliseconds
+        // A common heuristic: if timestamp > 1 Jan 2000 in ms and < 1 Jan 2050 in s
+        if (timestamp > 946684800000 && timestamp < (new Date('2050-01-01').getTime())) { // Likely milliseconds
+            return new Date(timestamp);
+        } else if (timestamp > 946684800 && timestamp < (new Date('2050-01-01').getTime() / 1000) ) { // Likely seconds
+             return new Date(timestamp * 1000);
+        }
+        // If it's a very large number, it's probably already ms. If small, assume seconds.
+        // This is a guess; KoReader might store in seconds.
+        // If timestamp string length > 10, likely ms. Unix seconds usually 10 digits.
+        if (String(timestamp).length > 10) {
             return new Date(timestamp);
         }
-        return new Date(timestamp * 1000); // Likely seconds
+        return new Date(timestamp * 1000);
     }
-    // If it's a string, try parsing directly
     if (typeof timestamp === 'string') {
         const date = new Date(timestamp);
         if (!isNaN(date.getTime())) {
             return date;
+        }
+        // Try parsing as number if string is numeric
+        const numTimestamp = Number(timestamp);
+        if (!isNaN(numTimestamp)) {
+            if (String(numTimestamp).length > 10) {
+                 return new Date(numTimestamp);
+            }
+            return new Date(numTimestamp * 1000);
         }
     }
     console.warn(`[ClientProcess] Could not parse timestamp: ${timestamp}`);
@@ -54,7 +68,7 @@ function parseTimestampToDate(timestamp: any): Date | undefined {
 
 export default function Home() {
   const { isFileLoaded, setIsFileLoaded } = useFileLoad();
-  const [dashboardData, setDashboardData] = useState<OverallStats | null>(MOCK_OVERALL_STATS);
+  const [dashboardData, setDashboardData] = useState<OverallStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
@@ -97,7 +111,6 @@ export default function Home() {
       }
       console.log('[ClientProcess] Database opened.');
 
-      // Log all table names for verification
       const tablesStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table';");
       const tableNames: string[] = [];
       while(tablesStmt.step()) {
@@ -114,8 +127,7 @@ export default function Home() {
       if (!tableNames.includes('page_stat_data')) {
         console.warn(`[ClientProcess] Warning: Table 'page_stat_data' not found. Total pages per book might be inaccurate.`);
       }
-
-      // Fetch total pages from page_stat_data
+      
       const bookIdToTotalPages = new Map<string, number>();
       if (tableNames.includes('page_stat_data')) {
         const pageStatDataStmt = db.prepare(`
@@ -133,7 +145,6 @@ export default function Home() {
         pageStatDataStmt.free();
         console.log(`[ClientProcess] Populated bookIdToTotalPages map with ${bookIdToTotalPages.size} entries.`);
       }
-
 
       const allBookStats: BookStats[] = [];
       const bookQuery = `
@@ -170,18 +181,25 @@ export default function Home() {
         if (totalPages === 0 && row.notes) {
           totalPages = parseTotalPages(row.notes as string | null);
         }
+        if (totalPages === 0 && row.pages && Number(row.pages) > 0) { // If pages read is positive, assume that's total pages if no other info
+            // console.warn(`[ClientProcess] No total_pages found for book '${title}', using current 'pages' (${row.pages}) as total. Notes: ${row.notes}`);
+            // totalPages = Number(row.pages); 
+            // This assumption might be wrong if a book is partially read and then total_pages is removed from notes
+        }
+
 
         const pagesRead = row.pages != null ? Number(row.pages) : 0;
         const totalTimeMinutes = row.total_read_time != null ? Math.round(Number(row.total_read_time) / 60) : 0;
+        
         const lastSessionDate = parseTimestampToDate(row.last_open);
         
         const bookStat: BookStats = {
           title: title,
-          totalPagesRead: pagesRead > totalPages && totalPages > 0 ? totalPages : pagesRead, // Cap pagesRead at totalPages
+          totalPagesRead: pagesRead > totalPages && totalPages > 0 ? totalPages : pagesRead,
           totalPages: totalPages,
           totalTimeMinutes: totalTimeMinutes,
-          sessions: totalTimeMinutes > 0 ? 1 : 0, // Simplified session count
-          firstSessionDate: lastSessionDate, // Placeholder, using last_open for now
+          sessions: totalTimeMinutes > 0 ? 1 : 0, 
+          firstSessionDate: lastSessionDate, // Using last_open for both for now
           lastSessionDate: lastSessionDate,
         };
         allBookStats.push(bookStat);
@@ -200,7 +218,7 @@ export default function Home() {
       
       const pagesReadPerBookData: NameValue[] = allBookStats
           .map(b => ({ name: b.title, value: b.totalPagesRead }))
-          .filter(b => b.value > 0 || allBookStats.find(fb => fb.title === b.name && fb.totalPages > 0));
+          .filter(b => b.value > 0 || allBookStats.find(fb => fb.title === b.name && fb.totalPages > 0)); // Show book if it has total pages, even if 0 read
 
       const timeSpentPerBookData: NameValue[] = allBookStats
           .map(b => ({ name: b.title, value: b.totalTimeMinutes }))
@@ -211,10 +229,10 @@ export default function Home() {
         totalPagesRead: overallTotalPagesRead,
         totalTimeMinutes: overallTotalTimeMinutes, 
         totalSessions: overallTotalSessions,   
-        readingActivity: [], // Placeholder
+        readingActivity: [], // Placeholder - requires page_stat processing
         pagesReadPerBook: pagesReadPerBookData,
         timeSpentPerBook: timeSpentPerBookData, 
-        monthlySummaries: [], // Placeholder
+        monthlySummaries: [], // Placeholder - requires page_stat processing
         allBookStats: allBookStats,
       };
       console.log('[ClientProcess] Returning OverallStats:', JSON.stringify(result, null, 2));
@@ -292,7 +310,7 @@ export default function Home() {
 
   const handleReset = () => {
     setIsFileLoaded(false);
-    setDashboardData(MOCK_OVERALL_STATS); 
+    setDashboardData(null); // Reset to null, so MOCK_OVERALL_STATS will be used by Dashboard as fallback
   };
 
   return (
@@ -312,4 +330,6 @@ export default function Home() {
     </>
   );
 }
+    
+
     

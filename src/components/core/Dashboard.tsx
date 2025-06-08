@@ -35,7 +35,7 @@ export function Dashboard({ data }: DashboardProps) {
     { name: "time", color: "chart-2", icon: Clock }
   ];
 
-  const { monthlySummaries, allBookStats } = data;
+  const { monthlySummaries, allBookStats } = data || {}; // Added || {} for safety if data is null/undefined initially
   const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [currentMonthData, setCurrentMonthData] = useState<MonthlyReadingSummary | null>(null);
@@ -44,17 +44,34 @@ export function Dashboard({ data }: DashboardProps) {
     if (monthlySummaries && monthlySummaries.length > 0) {
       const months = [...monthlySummaries].map(s => s.monthYear).reverse(); // Show newest first
       setAvailableMonths(months);
-      setSelectedMonth(months[0]); 
+      // Set selectedMonth only if it's not already set or if the previous selection is no longer valid
+      if (!selectedMonth || !months.includes(selectedMonth)) {
+        setSelectedMonth(months[0]);
+      }
+    } else {
+      // Reset when monthlySummaries is empty or undefined
+      setAvailableMonths([]);
+      setSelectedMonth('');
+      setCurrentMonthData(null);
     }
-  }, [monthlySummaries]);
+  }, [monthlySummaries, selectedMonth]); // Added selectedMonth to dependencies
 
   useEffect(() => {
-    if (selectedMonth && monthlySummaries) {
+    if (selectedMonth && monthlySummaries && monthlySummaries.length > 0) {
       const foundData = monthlySummaries.find(s => s.monthYear === selectedMonth);
       setCurrentMonthData(foundData || null);
+    } else if (!selectedMonth || !monthlySummaries || monthlySummaries.length === 0) {
+      // Ensure currentMonthData is cleared if no month is selected or no summaries exist
+      setCurrentMonthData(null);
     }
   }, [selectedMonth, monthlySummaries]);
 
+
+  // Ensure data is not null before trying to access its properties
+  if (!data) {
+    // Optionally, render a loading state or null, though page.tsx handles MOCK_OVERALL_STATS fallback
+    return null; 
+  }
 
   return (
     <div className="container mx-auto py-8 px-4 md:px-6 space-y-8">
@@ -154,7 +171,7 @@ export function Dashboard({ data }: DashboardProps) {
         <ReadingChart
           title="Reading Activity Over Time"
           description="Pages read and time spent daily."
-          data={data.readingActivity}
+          data={data.readingActivity || []}
           chartType="line"
           dataKeys={readingActivityDataKeys}
           xAxisDataKey="date"
@@ -168,7 +185,7 @@ export function Dashboard({ data }: DashboardProps) {
            <h2 id="pages-per-book-title" className="sr-only">Pages Per Book</h2>
           <ReadingChart
             title="Pages Read Per Book"
-            data={data.pagesReadPerBook}
+            data={data.pagesReadPerBook || []}
             chartType="bar"
             dataKeys={[{ name: "value", color: "chart-3" }]}
             xAxisDataKey="name"
@@ -181,7 +198,7 @@ export function Dashboard({ data }: DashboardProps) {
           <h2 id="time-per-book-title" className="sr-only">Time Per Book</h2>
           <ReadingChart
             title="Time Spent Per Book (Minutes)"
-            data={data.timeSpentPerBook}
+            data={data.timeSpentPerBook || []}
             chartType="bar"
             dataKeys={[{ name: "value", color: "chart-4" }]}
             xAxisDataKey="name"
@@ -192,3 +209,6 @@ export function Dashboard({ data }: DashboardProps) {
     </div>
   );
 }
+
+
+    
