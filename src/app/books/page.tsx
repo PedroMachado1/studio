@@ -14,8 +14,8 @@ export default function BooksPage() {
       </h1>
       <ScrollArea className="h-[calc(100vh-220px)]"> {/* Adjusted height for better scroll view */}
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {MOCK_BOOK_STATS_LIST.map((book, index) => (
-            <BookCard key={index} book={book} />
+          {MOCK_BOOK_STATS_LIST.map((book) => (
+            <BookCard key={book.title} book={book} />
           ))}
           {/* Add more books or a message if empty */}
         </div>
