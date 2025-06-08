@@ -29,7 +29,7 @@ const nextConfig: NextConfig = {
       config.resolve = {
         ...config.resolve,
         fallback: {
-          ...config.resolve?.fallback, // Spread existing fallbacks
+          ...(config.resolve?.fallback ?? {}), // Use ?? {} for robust merging
           fs: false,
           path: false,
         },
