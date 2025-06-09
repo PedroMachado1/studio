@@ -35,41 +35,36 @@ export function Dashboard({ data }: DashboardProps) {
     { name: "time", color: "chart-2", icon: Clock }
   ];
 
-  const { monthlySummaries, allBookStats } = data || {}; // Added || {} for safety if data is null/undefined initially
+  const { monthlySummaries, allBookStats } = data || {};
   const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [currentMonthData, setCurrentMonthData] = useState<MonthlyReadingSummary | null>(null);
 
   useEffect(() => {
     if (monthlySummaries && monthlySummaries.length > 0) {
-      const months = [...monthlySummaries].map(s => s.monthYear).reverse(); // Show newest first
+      const months = [...monthlySummaries].map(s => s.monthYear).reverse();
       setAvailableMonths(months);
-      // Set selectedMonth only if it's not already set or if the previous selection is no longer valid
       if (!selectedMonth || !months.includes(selectedMonth)) {
         setSelectedMonth(months[0]);
       }
     } else {
-      // Reset when monthlySummaries is empty or undefined
       setAvailableMonths([]);
       setSelectedMonth('');
       setCurrentMonthData(null);
     }
-  }, [monthlySummaries, selectedMonth]); // Added selectedMonth to dependencies
+  }, [monthlySummaries, selectedMonth]);
 
   useEffect(() => {
     if (selectedMonth && monthlySummaries && monthlySummaries.length > 0) {
       const foundData = monthlySummaries.find(s => s.monthYear === selectedMonth);
       setCurrentMonthData(foundData || null);
     } else if (!selectedMonth || !monthlySummaries || monthlySummaries.length === 0) {
-      // Ensure currentMonthData is cleared if no month is selected or no summaries exist
       setCurrentMonthData(null);
     }
   }, [selectedMonth, monthlySummaries]);
 
 
-  // Ensure data is not null before trying to access its properties
   if (!data) {
-    // Optionally, render a loading state or null, though page.tsx handles MOCK_OVERALL_STATS fallback
     return null; 
   }
 
@@ -77,8 +72,8 @@ export function Dashboard({ data }: DashboardProps) {
     <div className="container mx-auto py-8 px-4 md:px-6 space-y-8">
       {/* Overall Metrics */}
       <section aria-labelledby="overall-metrics-title">
-        <h2 id="overall-metrics-title" className="text-2xl font-bold font-headline mb-6 text-foreground">Overall Statistics</h2>
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        <h2 id="overall-metrics-title" className="text-xl sm:text-2xl font-bold font-headline mb-6 text-foreground">Overall Statistics</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <MetricCard title="Total Books Read" value={data.totalBooks} icon={BookCopy} description="Number of unique books finished or started." />
           <MetricCard title="Total Pages Read" value={data.totalPagesRead.toLocaleString()} icon={BookOpen} description="Across all reading sessions." />
           <MetricCard title="Total Time Spent" value={formatTime(data.totalTimeMinutes)} icon={Clock} description="Total duration of reading." />
@@ -90,8 +85,8 @@ export function Dashboard({ data }: DashboardProps) {
       {monthlySummaries && monthlySummaries.length > 0 && allBookStats && (
         <section aria-labelledby="monthly-summary-title">
           <div className="flex items-center gap-2 mb-6 mt-10">
-            <CalendarClock className="h-7 w-7 text-primary" />
-            <h2 id="monthly-summary-title" className="text-2xl font-bold font-headline text-foreground">
+            <CalendarClock className="h-6 w-6 sm:h-7 sm:w-7 text-primary" />
+            <h2 id="monthly-summary-title" className="text-xl sm:text-2xl font-bold font-headline text-foreground">
               Monthly Reading Summary
             </h2>
           </div>
@@ -113,7 +108,7 @@ export function Dashboard({ data }: DashboardProps) {
                 <CardTitle className="font-headline text-primary">Summary for {currentMonthData.monthYear}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
                   <MetricCard title="Pages Read" value={currentMonthData.totalPagesRead.toLocaleString()} icon={BookOpen} />
                   <MetricCard title="Time Spent" value={formatTime(currentMonthData.totalTimeMinutes)} icon={Clock} />
                   <MetricCard title="Sessions" value={currentMonthData.totalSessions} icon={Repeat} />
@@ -133,10 +128,10 @@ export function Dashboard({ data }: DashboardProps) {
                             key={index} 
                             className="text-sm text-muted-foreground p-4 bg-card rounded-md shadow-sm space-y-2"
                           >
-                            <div className="flex justify-between items-center">
+                            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                               <span className="font-semibold text-base text-foreground">{bookActivity.title}</span>
                               {bookActivity.completedInMonth && (
-                                <span className="flex items-center text-xs bg-accent/20 text-accent-foreground py-0.5 px-2 rounded-full">
+                                <span className="flex items-center text-xs bg-accent/20 text-accent-foreground py-0.5 px-2 rounded-full self-start sm:self-center">
                                   <Check className="h-3.5 w-3.5 mr-1 text-accent" /> Completed this month
                                 </span>
                               )}
@@ -144,7 +139,7 @@ export function Dashboard({ data }: DashboardProps) {
                             <p>Pages this month: <span className="font-medium text-foreground">{bookActivity.pagesReadInMonth.toLocaleString()}</span></p>
                             {overallBookStat && (
                               <>
-                                <p>Overall: <span className="font-medium text-foreground">{overallBookStat.totalPagesRead.toLocaleString()} / {overallBookStat.totalPages.toLocaleString()} pages</span></p>
+                                <p>Overall: <span className="font-medium text-foreground">{overallBookStat.totalPagesRead.toLocaleString()} / {overallBookStat.totalPages > 0 ? overallBookStat.totalPages.toLocaleString() : 'N/A'} pages</span></p>
                                 <div className="flex items-center gap-2">
                                   <Progress value={percentage} className="w-full h-2" aria-label={`${percentage}% complete`} />
                                   <span className="text-xs font-medium text-foreground">{percentage}%</span>
@@ -179,7 +174,7 @@ export function Dashboard({ data }: DashboardProps) {
         />
       </section>
 
-      <div className="grid gap-8 md:grid-cols-1 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         {/* Pages Read Per Book Chart */}
         <section aria-labelledby="pages-per-book-title">
            <h2 id="pages-per-book-title" className="sr-only">Pages Per Book</h2>

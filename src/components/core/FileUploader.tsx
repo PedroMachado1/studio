@@ -43,7 +43,7 @@ export function FileUploader({ onFileLoad }: FileUploaderProps) {
       reader.onload = (e) => {
         const arrayBuffer = e.target?.result as ArrayBuffer;
         if (arrayBuffer) {
-          onFileLoad(arrayBuffer); // Pass ArrayBuffer up for processing
+          onFileLoad(arrayBuffer); 
         } else {
           toast({
             title: "Error Reading File",
@@ -61,26 +61,25 @@ export function FileUploader({ onFileLoad }: FileUploaderProps) {
       };
       reader.readAsArrayBuffer(file);
     }
-    // Reset file input to allow re-uploading the same file
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
 
   return (
-    <div className="flex flex-col items-center justify-center py-12">
+    <div className="flex flex-col items-center justify-center py-8 sm:py-12 px-4">
       <Card className="w-full max-w-lg shadow-xl">
         <CardHeader className="text-center">
           <div className="mx-auto bg-primary/10 p-3 rounded-full w-fit mb-4">
-            <UploadCloud className="h-10 w-10 text-primary" />
+            <UploadCloud className="h-8 w-8 sm:h-10 sm:w-10 text-primary" />
           </div>
-          <CardTitle className="text-2xl font-headline">Upload your KoReader Data</CardTitle>
-          <CardDescription className="text-muted-foreground">
+          <CardTitle className="text-xl sm:text-2xl font-headline">Upload your KoReader Data</CardTitle>
+          <CardDescription className="text-sm sm:text-base text-muted-foreground mt-2">
             Select your KoReader metadata.sqlite file to visualize your reading habits.
             KoInsight helps you easily see your reading progress over time and across devices.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col items-center">
+        <CardContent className="flex flex-col items-center pt-4 sm:pt-6">
           <input
             id="fileInput"
             type="file"
@@ -92,10 +91,10 @@ export function FileUploader({ onFileLoad }: FileUploaderProps) {
           <Button
             size="lg"
             onClick={handleButtonClick}
-            className="mt-4 w-full max-w-xs"
+            className="mt-4 w-full max-w-xs text-sm sm:text-base"
             aria-label="Load Reading Data"
           >
-            <UploadCloud className="mr-2 h-5 w-5" />
+            <UploadCloud className="mr-2 h-4 w-4 sm:h-5 sm:w-5" />
             Load Reading Data
           </Button>
         </CardContent>
