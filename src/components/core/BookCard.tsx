@@ -5,7 +5,7 @@ import type React from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { BookOpen, Clock, Repeat, CalendarDays, CheckCircle2 } from "lucide-react";
 import type { BookStats } from "@/types/koreader";
-import { format } from 'date-fns';
+import { format, isValid } from 'date-fns';
 import { Progress } from "@/components/ui/progress";
 
 interface BookCardProps {
@@ -20,20 +20,34 @@ function formatTime(minutes: number): string {
   return `${mins}m`;
 }
 
-function formatDateSafe(date?: Date): string {
-  if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+function formatDateSafe(dateInput?: Date | string | number): string {
+  if (!dateInput) return "N/A";
+  
+  let date: Date | undefined;
+  if (dateInput instanceof Date) {
+    date = dateInput;
+  } else {
+    try {
+      date = new Date(dateInput);
+    } catch (e) {
+      return "Invalid Date";
+    }
+  }
+
+  if (!date || !isValid(date)) { // isValid from date-fns checks if the date is valid
     return "N/A";
   }
   try {
     return format(date, "MMM dd, yyyy");
   } catch (e) {
+    console.error("Error formatting date:", dateInput, e);
     return "Invalid Date";
   }
 }
 
 export function BookCard({ book }: BookCardProps) {
   const isCompleted = book.totalPages > 0 && book.totalPagesRead >= book.totalPages;
-  const progressPercentage = book.totalPages > 0 ? Math.round((book.totalPagesRead / book.totalPages) * 100) : 0;
+  const progressPercentage = book.totalPages > 0 ? Math.min(100, Math.round((book.totalPagesRead / book.totalPages) * 100)) : 0;
 
   return (
     <Card className="shadow-lg hover:shadow-xl transition-shadow duration-300 flex flex-col h-full">
@@ -54,7 +68,7 @@ export function BookCard({ book }: BookCardProps) {
       <CardContent className="space-y-3 flex-grow">
         <div className="space-y-1">
             <div className="flex justify-between items-center text-sm text-muted-foreground">
-                <span>Progress: {book.totalPagesRead.toLocaleString()} / {book.totalPages.toLocaleString()} pages</span>
+                <span>Progress: {book.totalPagesRead.toLocaleString()} / {book.totalPages > 0 ? book.totalPages.toLocaleString() : 'N/A'} pages</span>
                 <span className="font-medium text-foreground">{progressPercentage}%</span>
             </div>
             <Progress value={progressPercentage} className="h-2" aria-label={`${book.title} reading progress: ${progressPercentage}%`} />

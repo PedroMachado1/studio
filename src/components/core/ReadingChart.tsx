@@ -21,10 +21,17 @@ interface ReadingChartProps {
 
 export function ReadingChart({ title, description, data, chartType, dataKeys, xAxisDataKey, icon: TitleIcon }: ReadingChartProps) {
   const chartConfig = dataKeys.reduce((acc, key) => {
-    acc[key.name] = { label: key.name.charAt(0).toUpperCase() + key.name.slice(1), color: `hsl(var(--${key.color}))`, icon: key.icon };
+    acc[key.name] = { 
+      label: key.name.charAt(0).toUpperCase() + key.name.slice(1), 
+      color: `hsl(var(--${key.color}))`, 
+      icon: key.icon 
+    };
     return acc;
   }, {} as ChartConfig);
   
+  const barChartMargins = { top: 5, right: 20, left: -20, bottom: 70 }; // Increased bottom margin for angled labels
+  const lineChartMargins = { top: 5, right: 20, left: -20, bottom: 5 };
+
   return (
     <Card className="shadow-lg hover:shadow-xl transition-shadow duration-300">
       <CardHeader>
@@ -35,11 +42,25 @@ export function ReadingChart({ title, description, data, chartType, dataKeys, xA
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
       <CardContent>
-        <ChartContainer config={chartConfig} className="h-[300px] w-full">
+        <ChartContainer config={chartConfig} className="h-[350px] w-full"> 
+          {/* Increased height for bar chart to give more room */}
           {chartType === "bar" ? (
-            <BarChart accessibilityLayer data={data as {name: string, value: number}[]} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
+            <BarChart 
+              accessibilityLayer 
+              data={data as {name: string, value: number}[]} 
+              margin={barChartMargins}
+            >
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
-              <XAxis dataKey={xAxisDataKey} tickLine={false} tickMargin={10} axisLine={false} />
+              <XAxis 
+                dataKey={xAxisDataKey} 
+                tickLine={false} 
+                tickMargin={10} 
+                axisLine={false} 
+                angle={-35} // Angle labels
+                textAnchor="end" // Anchor point for angled labels
+                interval={0} // Attempt to show all labels
+                // height={80} // Explicit height for XAxis tick area if needed
+              />
               <YAxis tickLine={false} axisLine={false} tickMargin={10} />
               <ChartTooltip
                 cursor={false}
@@ -49,13 +70,18 @@ export function ReadingChart({ title, description, data, chartType, dataKeys, xA
                <ChartLegend content={<ChartLegendContent />} />
             </BarChart>
           ) : (
-            <LineChart accessibilityLayer data={data as {date: string, pages: number, time: number}[]} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
+            <LineChart 
+              accessibilityLayer 
+              data={data as {date: string, pages: number, time: number}[]} 
+              margin={lineChartMargins}
+            >
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis
                 dataKey={xAxisDataKey}
                 tickLine={false}
                 axisLine={false}
                 tickMargin={8}
+                // For line charts, typically don't need angled labels unless dates are very long or numerous
               />
               <YAxis tickLine={false} axisLine={false} tickMargin={8} />
               <ChartTooltip cursor={false} content={<ChartTooltipContent />} />

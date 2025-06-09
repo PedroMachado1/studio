@@ -29,30 +29,44 @@ function parseTotalPages(notes: string | null | undefined): number {
 // Helper function to parse timestamps (unix or string)
 function parseTimestampToDate(timestamp: any): Date | undefined {
     if (timestamp == null) return undefined;
+    // Check if it's a number (likely Unix timestamp)
     if (typeof timestamp === 'number') {
-        if (timestamp > 946684800000 && timestamp < (new Date('2050-01-01').getTime())) { 
-            return new Date(timestamp);
-        } else if (timestamp > 946684800 && timestamp < (new Date('2050-01-01').getTime() / 1000) ) { 
-             return new Date(timestamp * 1000);
+        // Heuristic: If it's a 10-digit number, assume seconds. If 13-digit, assume milliseconds.
+        // Valid Unix timestamps (seconds) for dates after ~1973 and before ~2242 are 9-10 digits.
+        // Valid Unix timestamps (milliseconds) for dates after ~1973 and before ~2242 are 12-13 digits.
+        // Common KoReader timestamps seem to be in seconds from what I've seen, but could be ms.
+        const tsStr = String(timestamp);
+        if (tsStr.length === 10 || (tsStr.length === 9 && timestamp > 0)) { // Likely seconds
+            // Ensure it's within a reasonable date range (e.g., after 2000, before 2050)
+            if (timestamp > 946684800 && timestamp < 2524608000) {
+                 return new Date(timestamp * 1000);
+            }
+        } else if (tsStr.length === 13) { // Likely milliseconds
+             if (timestamp > 946684800000 && timestamp < 2524608000000) {
+                return new Date(timestamp);
+            }
         }
-        if (String(timestamp).length > 10) {
-            return new Date(timestamp);
-        }
-        return new Date(timestamp * 1000);
+        // Fallback for other numeric cases, try treating as ms
+        try {
+            const d = new Date(timestamp);
+            if (!isNaN(d.getTime()) && d.getFullYear() > 1990 && d.getFullYear() < 2070) return d;
+            const d_s = new Date(timestamp * 1000);
+             if (!isNaN(d_s.getTime()) && d_s.getFullYear() > 1990 && d_s.getFullYear() < 2070) return d_s;
+        } catch (e) { /* ignore */ }
     }
+    // Check if it's a string (parsable date string)
     if (typeof timestamp === 'string') {
         const date = new Date(timestamp);
         if (!isNaN(date.getTime())) {
             return date;
         }
+        // Try parsing as number if it's a stringified number
         const numTimestamp = Number(timestamp);
         if (!isNaN(numTimestamp)) {
-            if (String(numTimestamp).length > 10) {
-                 return new Date(numTimestamp);
-            }
-            return new Date(numTimestamp * 1000);
+            return parseTimestampToDate(numTimestamp); // Recurse with number
         }
     }
+    console.warn(`[parseTimestampToDate] Could not parse timestamp: ${timestamp}`);
     return undefined;
 }
 
@@ -80,7 +94,6 @@ export default function Home() {
           throw new Error('SQL.js (initSqlJs) is not a function.');
       }
       
-      console.log('[ClientProcess] Attempting to initialize SQL.js with locateFile pointing to sql.js.org...');
       SQL = await initSqlJs({
         locateFile: file => {
           const path = `https://sql.js.org/dist/${file}`;
@@ -116,25 +129,22 @@ export default function Home() {
         console.error(`[ClientProcess] Critical: Table 'book' not found. Available tables: ${tableNames.join(', ')}`);
         throw new Error("Table 'book' not found. Check if this is a valid KoReader metadata.sqlite file.");
       }
-      if (!tableNames.includes('page_stat_data')) {
-        console.warn(`[ClientProcess] Warning: Table 'page_stat_data' not found. Total pages per book might be inaccurate.`);
-      }
       
       const bookIdToTotalPages = new Map<string, number>();
       if (tableNames.includes('page_stat_data')) {
-        const pageStatDataStmt = db.prepare(`
+        const pageStatDataTotalPagesStmt = db.prepare(`
             SELECT id_book, MAX(total_pages) as book_total_pages 
             FROM page_stat_data 
             GROUP BY id_book
         `);
-        console.log('[ClientProcess] Prepared SQL statement for page_stat_data table.');
-        while(pageStatDataStmt.step()) {
-            const row = pageStatDataStmt.getAsObject();
+        console.log('[ClientProcess] Prepared SQL statement for page_stat_data (total pages).');
+        while(pageStatDataTotalPagesStmt.step()) {
+            const row = pageStatDataTotalPagesStmt.getAsObject();
             if (row.id_book && row.book_total_pages != null) {
                 bookIdToTotalPages.set(row.id_book as string, Number(row.book_total_pages));
             }
         }
-        pageStatDataStmt.free();
+        pageStatDataTotalPagesStmt.free();
         console.log(`[ClientProcess] Populated bookIdToTotalPages map with ${bookIdToTotalPages.size} entries.`);
       }
 
@@ -152,13 +162,13 @@ export default function Home() {
       console.log(`[ClientProcess] Executing query for 'book' table: ${bookQuery}`);
       const bookStmt = db.prepare(bookQuery);
       
-      let rowCount = 0;
+      let bookRowCount = 0;
       while (bookStmt.step()) { 
-        rowCount++;
+        bookRowCount++;
         const row = bookStmt.getAsObject(); 
-
-        if (rowCount <= 5 || rowCount % 100 === 0) {
-          console.log(`[ClientProcess] Processing book row ${rowCount}: id='${row.id}', title='${row.title}', pages=${row.pages}, total_read_time=${row.total_read_time}, last_open=${row.last_open}, notes_length=${(row.notes as string)?.length}`);
+        
+        if (bookRowCount <= 5 || bookRowCount % 100 === 0) {
+          console.log(`[ClientProcess] Processing book row ${bookRowCount}: id='${row.id}', title='${row.title}', pages=${row.pages}, total_read_time=${row.total_read_time}, last_open=${row.last_open}, notes_length=${(row.notes as string)?.length}`);
         }
         
         if (!row.title || (row.title as string).trim() === '') {
@@ -174,32 +184,72 @@ export default function Home() {
         }
         
         const pagesRead = row.pages != null ? Number(row.pages) : 0;
-        const totalTimeMinutes = row.total_read_time != null ? Math.round(Number(row.total_read_time) / 60) : 0;
+        const totalTimeSeconds = row.total_read_time != null ? Number(row.total_read_time) : 0;
+        const totalTimeMinutes = Math.round(totalTimeSeconds / 60);
         
-        const lastSessionDate = parseTimestampToDate(row.last_open);
+        const lastSessionDateObj = parseTimestampToDate(row.last_open);
         
         const bookStat: BookStats = {
           title: title,
           totalPagesRead: pagesRead > totalPages && totalPages > 0 ? totalPages : pagesRead,
           totalPages: totalPages,
           totalTimeMinutes: totalTimeMinutes,
-          sessions: totalTimeMinutes > 0 ? 1 : 0, 
-          firstSessionDate: lastSessionDate, 
-          lastSessionDate: lastSessionDate,
+          sessions: totalTimeMinutes > 0 ? 1 : 0, // Simplified: 1 session if any time spent
+          firstSessionDate: lastSessionDateObj, // Simplified: use last_open as first_session too
+          lastSessionDate: lastSessionDateObj,
         };
         allBookStats.push(bookStat);
       }
       bookStmt.free();
-      console.log(`[ClientProcess] Finished processing ${rowCount} rows from book table.`);
+      console.log(`[ClientProcess] Finished processing ${bookRowCount} rows from book table.`);
       
       console.log(`[ClientProcess] Found ${allBookStats.length} book stat entries after processing.`);
       if (allBookStats.length > 0 && allBookStats[0]) {
           console.log('[ClientProcess] First processed book details:', JSON.stringify(allBookStats[0], null, 2));
       }
 
+      // Process Reading Activity
+      const readingActivity: ReadingActivityPoint[] = [];
+      if (tableNames.includes('page_stat_data')) {
+        const activityQuery = `
+            SELECT id_book, page, start_time, duration
+            FROM page_stat_data
+            ORDER BY start_time ASC
+        `;
+        console.log(`[ClientProcess] Executing query for 'page_stat_data' (for reading activity): ${activityQuery}`);
+        const activityStmt = db.prepare(activityQuery);
+        const dailyActivityMap = new Map<string, { pages: Set<string>, time: number }>();
+
+        while(activityStmt.step()) {
+            const row = activityStmt.getAsObject();
+            const startTime = parseTimestampToDate(row.start_time);
+            if (!startTime) continue;
+
+            const dateStr = startTime.toISOString().split('T')[0];
+            const durationMinutes = Math.round(Number(row.duration || 0) / 60);
+            const bookPageIdentifier = `${row.id_book}-${row.page}`;
+
+            if (!dailyActivityMap.has(dateStr)) {
+                dailyActivityMap.set(dateStr, { pages: new Set(), time: 0 });
+            }
+            const activity = dailyActivityMap.get(dateStr)!;
+            activity.time += durationMinutes;
+            activity.pages.add(bookPageIdentifier); // Counts distinct book-page entries per day
+        }
+        activityStmt.free();
+        console.log(`[ClientProcess] Processed page_stat_data for daily activity. Map size: ${dailyActivityMap.size}`);
+        
+        dailyActivityMap.forEach((value, date) => {
+            readingActivity.push({ date, pages: value.pages.size, time: value.time });
+        });
+        readingActivity.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        console.log(`[ClientProcess] Generated readingActivity array with ${readingActivity.length} points.`);
+      }
+
+
       const overallTotalPagesRead = allBookStats.reduce((sum, book) => sum + book.totalPagesRead, 0);
       const overallTotalTimeMinutes = allBookStats.reduce((sum, book) => sum + book.totalTimeMinutes, 0);
-      const overallTotalSessions = allBookStats.reduce((sum, book) => sum + book.sessions, 0);
+      const overallTotalSessions = allBookStats.reduce((sum, book) => sum + book.sessions, 0); // Still simplified
       
       const pagesReadPerBookData: NameValue[] = allBookStats
           .map(b => ({ name: b.title, value: b.totalPagesRead }))
@@ -214,10 +264,10 @@ export default function Home() {
         totalPagesRead: overallTotalPagesRead,
         totalTimeMinutes: overallTotalTimeMinutes, 
         totalSessions: overallTotalSessions,   
-        readingActivity: [], 
+        readingActivity: readingActivity, 
         pagesReadPerBook: pagesReadPerBookData,
         timeSpentPerBook: timeSpentPerBookData, 
-        monthlySummaries: [], 
+        monthlySummaries: [], // Monthly summaries still to be implemented
         allBookStats: allBookStats,
       };
       console.log('[ClientProcess] Returning OverallStats:', JSON.stringify(result, null, 2));
@@ -241,21 +291,15 @@ export default function Home() {
 
   const handleFileLoad = async (fileBuffer?: ArrayBuffer) => {
     if (!fileBuffer) { 
-      // This case is for "Load Sample Data" which is effectively removed by removing MOCK_OVERALL_STATS
-      // Now, if no file buffer, we do nothing, user must upload a file.
-      // Or, if you want a specific "no file loaded" state, handle it here.
-      // For now, this path won't be hit by FileUploader.
       console.log('[Home Page] No file buffer provided to handleFileLoad.');
-      // setDashboardData(undefined); // Ensure it's undefined
-      // setLoadedStats(undefined);
-      // setIsFileLoaded(false); // Not strictly necessary to change isFileLoaded here if no buffer
       return;
     }
 
     setIsLoading(true);
-    setDashboardData(undefined); // Clear previous data
-    setLoadedStats(undefined);   // Clear previous data in context
-    setIsFileLoaded(false);      // Set to false until processing finishes
+    // Clear previous data before processing new file
+    setDashboardData(undefined);
+    setLoadedStats(undefined);
+    setIsFileLoaded(false); // Will be set to true on success
 
     toast({
       title: "Processing your KoReader data...",
@@ -267,10 +311,13 @@ export default function Home() {
       const processedStats = await processDbClientSide(fileBuffer);
       console.log('[Home Page] Received processedStats from client-side function:', JSON.stringify(processedStats, null, 2));
       
-      setDashboardData(processedStats);
+      // Set context data first
       setLoadedStats(processedStats);
-      setIsFileLoaded(true);
-      setDashboardKey(Date.now().toString());
+      setIsFileLoaded(true); 
+      
+      // Then set local state for dashboard and update key
+      setDashboardData(processedStats);
+      setDashboardKey(Date.now().toString()); // Force Dashboard remount
 
       if (!processedStats || (processedStats.totalBooks === 0 && processedStats.allBookStats.length === 0 && processedStats.totalPagesRead === 0) ) {
         toast({
@@ -286,10 +333,13 @@ export default function Home() {
       }
     } catch (error) {
       console.error("[Home Page] Error in handleFileLoad's try block (client-side processing):", error);
-      setDashboardData(undefined); 
+      
+      // Clear context and local data on error
       setLoadedStats(undefined);
-      setIsFileLoaded(true); // Still set to true to show the "Load Another File" button
+      setIsFileLoaded(false); // Keep as false or handle "error state"
+      setDashboardData(undefined); 
       setDashboardKey(Date.now().toString()); // Re-key to clear dashboard if it was showing old data
+      
       toast({
         title: "Error Processing File Client-Side",
         description: `Could not process the KoReader data. ${error instanceof Error ? error.message : String(error)}. Please try again or check the console.`,
@@ -303,10 +353,13 @@ export default function Home() {
   };
 
   const handleReset = () => {
+    // Update context first
     setIsFileLoaded(false);
-    setDashboardData(undefined); 
     setLoadedStats(undefined);
-    setDashboardKey(Date.now().toString());
+    
+    // Then local state
+    setDashboardData(undefined); 
+    setDashboardKey(Date.now().toString()); // Re-key to ensure Dashboard resets or clears
   };
 
   return (
@@ -326,3 +379,4 @@ export default function Home() {
     </>
   );
 }
+
